@@ -6,6 +6,7 @@ measurement/control devices used in the PMT experiment.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -313,6 +314,45 @@ class Preamble:
         return self.xorigin + (np.arange(n) - self.xreference) * self.xincrement
 
 
+@dataclass
+class FrameSet:
+    """Triggered frames from the Rigol waveform recorder, kept as raw codes.
+
+    ``codes[ch]`` has shape (n_frames, n_points); convert with ``volts(ch)``.
+    """
+
+    time_s: np.ndarray
+    codes: dict[int, np.ndarray]
+    preambles: dict[int, Preamble]
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def n_frames(self) -> int:
+        return len(next(iter(self.codes.values())))
+
+    def volts(self, channel: int) -> np.ndarray:
+        return self.preambles[channel].volts(self.codes[channel])
+
+    def save(self, path) -> None:
+        arrays = {"time_s": self.time_s}
+        for ch, codes in self.codes.items():
+            arrays[f"ch{ch}_codes"] = codes
+            p = self.preambles[ch]
+            arrays[f"ch{ch}_preamble"] = np.array(
+                [p.format, p.type, p.points, p.count, p.xincrement, p.xorigin,
+                 p.xreference, p.yincrement, p.yorigin, p.yreference])
+        np.savez_compressed(path, meta=json.dumps(self.meta, default=str), **arrays)
+
+    @classmethod
+    def load(cls, path) -> "FrameSet":
+        with np.load(path) as data:
+            channels = sorted(int(k[2:-6]) for k in data.files if k.endswith("_codes"))
+            pres = {ch: Preamble.parse(",".join(map(repr, data[f"ch{ch}_preamble"].tolist())))
+                    for ch in channels}
+            return cls(time_s=data["time_s"], codes={ch: data[f"ch{ch}_codes"] for ch in channels},
+                       preambles=pres, meta=json.loads(str(data["meta"])))
+
+
 class RigolScope(_ResourceBase):
     """Rigol MHO954 oscilloscope wrapper for single-shot Ch1/Ch2 capture.
 
@@ -347,8 +387,8 @@ class RigolScope(_ResourceBase):
         rm = pyvisa.ResourceManager(self.visa_backend)
         name = self.visa_resource(resource_name or self.resource_name or self.DEFAULT_HOST)
         self.resource_name = name
-        # The scope's VXI-11 server refuses a new link for a few seconds after
-        # the previous one closes, so retry before giving up.
+        # The connection is occasionally refused right after a previous
+        # session closes, so retry before giving up.
         for attempt in range(self.CONNECT_ATTEMPTS):
             try:
                 self._instrument = rm.open_resource(name)
@@ -358,16 +398,27 @@ class RigolScope(_ResourceBase):
                     raise
                 time.sleep(self.CONNECT_RETRY_S)
         self._instrument.timeout = self.timeout_ms
+        if name.upper().endswith("::SOCKET"):
+            # Raw sockets have no message framing; SCPI replies end in a newline.
+            self._instrument.read_termination = "\n"
+            self._instrument.write_termination = "\n"
         self.idn = self._query("*IDN?").strip()
         return self
 
-    @staticmethod
-    def visa_resource(host_or_resource: str) -> str:
-        """``192.168.0.101`` -> ``TCPIP0::192.168.0.101::INSTR`` (LXI/VXI-11, the
-        scope's default VISA type per :LAN:VISA?); full VISA names pass through."""
+    SOCKET_PORT = 5555
+
+    @classmethod
+    def visa_resource(cls, host_or_resource: str) -> str:
+        """``192.168.0.101`` -> ``TCPIP0::192.168.0.101::5555::SOCKET``; full VISA names pass through.
+
+        Raw SCPI socket rather than VXI-11 (``TCPIP0::<ip>::INSTR``): after
+        sessions that ended abruptly, the scope's VXI-11 server accepted links
+        but stopped answering, while the socket kept working (and moves
+        waveform data faster, ~30 vs ~49 ms per 1k-point channel).
+        """
         if "::" in host_or_resource:
             return host_or_resource
-        return f"TCPIP0::{host_or_resource}::INSTR"
+        return f"TCPIP0::{host_or_resource}::{cls.SOCKET_PORT}::SOCKET"
 
     # -- configuration -----------------------------------------------------
     def configure_channel(self, channel: int, scale_v_div: float, offset_v: float = 0.0,
@@ -485,6 +536,75 @@ class RigolScope(_ResourceBase):
         n = min(len(ascii_v), len(word_v))
         return float(np.max(np.abs(ascii_v[:n] - word_v[:n]))) if n else float("nan")
 
+    # -- waveform recorder (programming guide section 3.19) ---------------
+    def set_trigger_sweep(self, mode: str) -> None:
+        """AUTO, NORMal or SINGle. Use NORMal so frames only record on real triggers."""
+        self._write(f":TRIG:SWE {mode}")
+
+    def max_record_frames(self) -> int:
+        """Frames the recorder can hold at the current memory depth."""
+        return int(float(self._query(":RECord:WRECord:FMAX?")))
+
+    def record_frames(self, n_frames: int, channels: tuple[int, ...] = (1, 2),
+                      timeout_s: float = 60.0,
+                      progress: Callable[[int, int], None] | None = None) -> FrameSet:
+        """Record *n_frames* triggers in hardware, then read every frame back.
+
+        Replay frames are read in NORMal waveform mode: in RAW mode the scope
+        returns the same data for every frame. Selecting a frame is
+        asynchronous, so each selection is followed by *OPC? (without it
+        about 1 in 6 reads returned the previous frame).
+        """
+        limit = self.max_record_frames()
+        if n_frames > limit:
+            raise ValueError(f"{n_frames} frames requested; the recorder holds {limit} "
+                             "at this memory depth")
+        self._write(":RECord:WRECord:ENABle ON")
+        self._write(":RECord:WRECord:PROMpt OFF")
+        self._write(f":RECord:WRECord:FRAMes {n_frames}")
+        self._write(":RECord:WRECord:FINTerval 1e-8")  # minimum: record every trigger
+        self._write(":RECord:WRECord:OPERate RUN")
+        deadline = time.monotonic() + timeout_s
+        while self._query(":RECord:WRECord:OPERate?").strip().upper() != "STOP":
+            if time.monotonic() > deadline:
+                self._write(":RECord:WRECord:OPERate STOP")
+                raise TimeoutError(f"Recording of {n_frames} frames did not finish in "
+                                   f"{timeout_s:g} s; is the trigger firing?")
+            time.sleep(0.05)
+        recorded = int(float(self._query(":RECord:WREPlay:FMAX?")))
+        if recorded < n_frames:
+            raise InstrumentError(f"Recorder stopped after {recorded} of {n_frames} frames")
+
+        self._write(":WAV:MODE NORM")
+        self._write(":WAV:FORM WORD")
+        self._write(":RECord:WREPlay:FCURrent 1")
+        self._query("*OPC?")
+        pres = {}
+        for ch in channels:
+            self._write(f":WAV:SOUR CHAN{ch}")
+            pres[ch] = self.read_preamble()
+        points = pres[channels[0]].points
+        self._write(":WAV:STAR 1")
+        self._write(f":WAV:STOP {points}")
+        codes = {ch: np.empty((n_frames, points), dtype=np.uint16) for ch in channels}
+        for i in range(n_frames):
+            self._write(f":RECord:WREPlay:FCURrent {i + 1}")
+            self._query("*OPC?")
+            for ch in channels:
+                self._write(f":WAV:SOUR CHAN{ch}")
+                data = self._query_codes()
+                if len(data) != points:
+                    raise InstrumentError(f"Frame {i + 1} Ch{ch}: {len(data)} points, "
+                                          f"expected {points}")
+                codes[ch][i] = data
+            if progress is not None:
+                progress(i + 1, n_frames)
+        self._write(":RECord:WRECord:ENABle OFF")
+        meta = {"idn": self.idn, "n_frames": n_frames,
+                "sample_rate_Hz": 1.0 / pres[channels[0]].xincrement}
+        return FrameSet(time_s=pres[channels[0]].times(points), codes=codes,
+                        preambles=pres, meta=meta)
+
     def capture_channels(self) -> RigolScopeCapture:
         """Read Ch1 and Ch2 from the stopped scope."""
         t1, v1, p1 = self.read_channel(1)
@@ -517,6 +637,7 @@ __all__ = [
     "IsegHV",
     "RigolScope",
     "RigolScopeCapture",
+    "FrameSet",
     "Preamble",
     "InstrumentError",
     "parse_iseg_value",

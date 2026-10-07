@@ -3,7 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ad3pulse.hardware import InstrumentError, IsegHV, Preamble, RigolScope, parse_iseg_value
+from ad3pulse.hardware import (FrameSet, InstrumentError, IsegHV, Preamble, RigolScope,
+                               parse_iseg_value)
 from ad3pulse.instrument import PulseSpec
 
 
@@ -128,7 +129,7 @@ def test_iseg_rejected_command_raises() -> None:
 
 def test_visa_resources_from_ip() -> None:
     assert IsegHV.visa_resource("192.168.0.100") == "TCPIP0::192.168.0.100::10001::SOCKET"
-    assert RigolScope.visa_resource("192.168.0.101") == "TCPIP0::192.168.0.101::INSTR"
+    assert RigolScope.visa_resource("192.168.0.101") == "TCPIP0::192.168.0.101::5555::SOCKET"
     assert RigolScope.visa_resource("TCPIP0::10.0.0.5::5555::SOCKET") == "TCPIP0::10.0.0.5::5555::SOCKET"
 
 
@@ -213,6 +214,46 @@ def test_rigol_capture_rejects_empty_readout() -> None:
     fake.responses[":WAV:PRE?"] = "1,2,0,1,5e-10,-2.5e-6,0,6.6667e-06,0,32768"
     with pytest.raises(InstrumentError, match="no data"):
         RigolScope(instrument=fake).capture_channels()
+
+
+def _recorder_fake(n_frames: int) -> FakeInstrument:
+    fake = FakeInstrument()
+    fake.responses[":RECORD:WRECORD:FMAX?"] = "126976"
+    fake.responses[":RECORD:WRECORD:OPERATE?"] = "STOP"
+    fake.responses[":RECORD:WREPLAY:FMAX?"] = str(n_frames)
+    fake.responses[":WAV:PRE?"] = "1,0,3,1,1e-9,-1e-9,0,1e-3,0,100"
+    fake.responses["*OPC?"] = "1"
+    # frame-major, Ch1 then Ch2 per frame
+    fake.binary = [np.array([100 + 10 * f + ch] * 3, dtype=np.uint16)
+                   for f in range(n_frames) for ch in (1, 2)]
+    return fake
+
+
+def test_rigol_record_frames_reads_each_frame(tmp_path) -> None:
+    fake = _recorder_fake(3)
+    frames = RigolScope(instrument=fake).record_frames(3, channels=(1, 2))
+
+    assert frames.codes[1][:, 0].tolist() == [101, 111, 121]
+    assert frames.codes[2][:, 0].tolist() == [102, 112, 122]
+    np.testing.assert_allclose(frames.volts(1)[1], [11e-3] * 3)
+    assert ":WAV:MODE NORM" in fake.commands
+    for i in (1, 2, 3):  # every frame selection is followed by *OPC?
+        k = fake.commands.index(f":RECord:WREPlay:FCURrent {i}", 3)
+        assert fake.commands[k + 1] == "*OPC?"
+
+    frames.meta["amplitude_V"] = 1.7
+    frames.save(tmp_path / "f.npz")
+    loaded = FrameSet.load(tmp_path / "f.npz")
+    np.testing.assert_array_equal(loaded.codes[2], frames.codes[2])
+    np.testing.assert_allclose(loaded.volts(1), frames.volts(1))
+    np.testing.assert_allclose(loaded.time_s, frames.time_s)
+    assert loaded.meta["amplitude_V"] == 1.7
+
+
+def test_rigol_record_frames_rejects_too_many() -> None:
+    fake = _recorder_fake(1)
+    with pytest.raises(ValueError, match="holds 126976"):
+        RigolScope(instrument=fake).record_frames(200_000)
 
 
 def test_pulse_fit_to_awg_100ns() -> None:

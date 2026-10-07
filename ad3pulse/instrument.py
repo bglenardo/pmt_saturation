@@ -230,6 +230,44 @@ class AnalogDiscovery:
         dwf.FDwfAnalogOutTriggerSourceSet(h, ch, c_int(D.TRIGSRC_NONE))
         self._awg_configured.add(pulse.channel)
 
+    def start_pulse_train(self, pulse: PulseSpec, rate_hz: float) -> float:
+        """Play *pulse* continuously at *rate_hz* until stop_output(); return the realised width.
+
+        Only one short period (pre_delay + width + post_delay) is rendered, so
+        the AWG keeps its 8 ns step; the rest of each cycle is an AWG wait at
+        the idle level (0 V offset).
+        """
+        if pulse.repeat != 1 or pulse.baseline != 0.0:
+            raise ValueError("pulse trains use repeat=1 and baseline=0")
+        wait = 1.0 / rate_hz - pulse.period
+        if wait < 0:
+            raise ValueError(f"rate {rate_hz:g} Hz is faster than the pulse period "
+                             f"{pulse.period:g} s allows")
+        self.configure_pulse(pulse)
+        h, ch = self._hdwf, c_int(pulse.channel)
+        dwf.FDwfAnalogOutRunSet(h, ch, c_double(pulse.period))
+        dwf.FDwfAnalogOutWaitSet(h, ch, c_double(wait))
+        dwf.FDwfAnalogOutRepeatSet(h, ch, c_int(0))  # 0 = repeat until stopped
+        dwf.FDwfAnalogOutConfigure(h, ch, c_int(1))
+        self._train = pulse
+        return pulse.fit_to_awg(AWG_MAX_RATE, pulse.samples)
+
+    def set_pulse_amplitude(self, volts: float, max_v: float | None = None) -> None:
+        """Change a running pulse train's height (the rendered shape is 0..1)."""
+        pulse = getattr(self, "_train", None)
+        if pulse is None:
+            raise DwfError("No pulse train running; call start_pulse_train() first")
+        if volts <= 0:
+            raise ValueError("pulse train amplitude must be > 0")
+        if max_v is not None and volts > max_v:
+            raise ValueError(f"amplitude {volts:g} V exceeds the {max_v:g} V limit")
+        dwf.FDwfAnalogOutNodeAmplitudeSet(self._hdwf, c_int(pulse.channel),
+                                          c_int(D.NODE_CARRIER), c_double(volts))
+        # With AutoConfigure on, changing a setting stops the running train
+        # (status goes to READY), so start it again.
+        dwf.FDwfAnalogOutConfigure(self._hdwf, c_int(pulse.channel), c_int(1))
+        pulse.amplitude = volts
+
     def stop_output(self, channel: int = -1) -> None:
         dwf.FDwfAnalogOutConfigure(self._hdwf, c_int(channel), c_int(0))
 

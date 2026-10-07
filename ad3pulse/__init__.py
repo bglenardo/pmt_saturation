@@ -5,7 +5,7 @@ scope and ISEG HV supply are the measurement/control devices for the PMT setup.
 """
 
 from .dwfapi import DwfError, dwf
-from .hardware import IsegHV, InstrumentError, RigolScope, RigolScopeCapture
+from .hardware import FrameSet, IsegHV, InstrumentError, RigolScope, RigolScopeCapture
 from .instrument import AnalogDiscovery, Capture, PulseSpec, ScopeSpec
 from .repeat import capture_repeats
 from .sweep import run_sweep, summarize
@@ -20,6 +20,7 @@ __all__ = [
     "IsegHV",
     "RigolScope",
     "RigolScopeCapture",
+    "FrameSet",
     "InstrumentError",
     "run_sweep",
     "summarize",
