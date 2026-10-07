@@ -221,6 +221,7 @@ def _recorder_fake(n_frames: int) -> FakeInstrument:
     fake.responses[":RECORD:WRECORD:FMAX?"] = "126976"
     fake.responses[":RECORD:WRECORD:OPERATE?"] = "STOP"
     fake.responses[":RECORD:WREPLAY:FMAX?"] = str(n_frames)
+    fake.responses[":TRIG:STAT?"] = "WAIT"
     fake.responses[":WAV:PRE?"] = "1,0,3,1,1e-9,-1e-9,0,1e-3,0,100"
     fake.responses["*OPC?"] = "1"
     # frame-major, Ch1 then Ch2 per frame
@@ -237,6 +238,10 @@ def test_rigol_record_frames_reads_each_frame(tmp_path) -> None:
     assert frames.codes[2][:, 0].tolist() == [102, 112, 122]
     np.testing.assert_allclose(frames.volts(1)[1], [11e-3] * 3)
     assert ":WAV:MODE NORM" in fake.commands
+    # normal triggering is re-armed before recording (a bare :RUN free-runs after a recording)
+    k = fake.commands.index(":TRIG:SWE NORM")
+    assert fake.commands[k + 1] == ":RUN"
+    assert k < fake.commands.index(":RECord:WRECord:OPERate RUN")
     for i in (1, 2, 3):  # every frame selection is followed by *OPC?
         k = fake.commands.index(f":RECord:WREPlay:FCURrent {i}", 3)
         assert fake.commands[k + 1] == "*OPC?"

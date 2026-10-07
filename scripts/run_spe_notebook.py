@@ -1,4 +1,4 @@
-"""Run spe_calibration.ipynb cells headless (no Jupyter kernel needed).
+"""Run notebook cells headless (no Jupyter kernel needed); spe_calibration.ipynb by default.
 
 Cells are selected by their tag (cell metadata "tags"). Parameter overrides are
 Python statements executed right after the parameters cell. Output goes to
@@ -16,6 +16,12 @@ stdout; redirect it to a log file in runs/spe/ for long runs.
         stop the AD3 output and switch HV ch0/ch1 off
 
 Example: python scripts/run_spe_notebook.py cal "{1: 1.68}" "CAL_FRAMES = 5000" > runs/spe/cal.log 2>&1
+
+Any notebook, any tagged cells (--notebook defaults to spe_calibration.ipynb):
+    python scripts/run_spe_notebook.py --notebook saturation.ipynb cells TAG,TAG,... [overrides] [--hv-off]
+        runs the cells in order. If they include connect, the AD3 is stopped at the end (also on
+        failure); with --hv-off, HV ch0/ch1 are switched off too.
+    e.g. ... --notebook saturation.ipynb cells parameters,helpers,connect,reach,close "REGIME = 'long'"
 """
 
 import json
@@ -36,6 +42,10 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 
 NOTEBOOK = PROJECT / "spe_calibration.ipynb"
+if "--notebook" in sys.argv:
+    k = sys.argv.index("--notebook")
+    NOTEBOOK = PROJECT / sys.argv[k + 1]
+    del sys.argv[k:k + 2]
 CELLS = {c["metadata"]["tags"][0]: "".join(c["source"])
          for c in json.loads(NOTEBOOK.read_text(encoding="utf-8"))["cells"]
          if c["cell_type"] == "code" and c["metadata"].get("tags")}
@@ -110,6 +120,22 @@ def main(argv):
             print("CAL DONE" + (" (HV off)" if mode == "final" else " (HV left on)"), flush=True)
     elif mode == "refit":
         print_fits(run(["parameters", "load_saved", "fit"], argv[2] if len(argv) > 2 else ""))
+    elif mode == "cells":
+        hv_flag = "--hv-off" in argv
+        args = [a for a in argv[2:] if a != "--hv-off"]
+        tags = args[0].split(",")
+        try:
+            run(tags, args[1] if len(args) > 1 else "")
+        except Exception:
+            if not hv_flag:
+                raise
+            traceback.print_exc()
+        finally:
+            if "connect" in tags:  # analysis-only runs never touch the hardware
+                ad3_off()
+            if hv_flag:
+                hv_off()
+            print("CELLS DONE" + (" (HV off)" if hv_flag else " (HV left on)"), flush=True)
     elif mode == "off":
         ad3_off()
         hv_off()

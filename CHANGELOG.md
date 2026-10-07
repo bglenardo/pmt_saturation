@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-10-07 (later): saturation studies, code, notebook and first hardware look
+
+**Added**
+- **`ad3pulse/acquire.py`:** `ScopeSession` (scope settings, LED amplitude, frame recording with reconnect/retry,
+  raw saves with metadata), per-point vertical `autorange()` over a 1-2-5 V/div ladder, and a hard peak guard
+  on the 50 Ohm inputs (`check_peaks()` raises `PeakLimitExceeded`).
+- **`ad3pulse/saturation.py`:** `peak_current`, `binned_charge`, `fwhm`, `summarize_point`, `linearity`
+  (A against reference B), `crossing`, `shape_ratio`, `late_early` (with error) and `flag_reference`.
+- **`saturation.ipynb`:** two regimes, short (100 ns, space charge) and long (10 us, base-capacitor depletion),
+  at < 5 Hz. Cells: timing, reach (quick guarded ramp), scan (up then down), load_saved, analyze (linearity,
+  5 %/10 % points, pulse shapes, A(t)/B(t) droop, PMT B self-check).
+- **`scripts/run_spe_notebook.py`:** `--notebook` option and a generic `cells` mode (`--hv-off` optional).
+- **Tests:** `tests/test_saturation.py` (synthetic saturation and droop, reference flag, auto-range and peak
+  guard against a fake scope).
+- **`saturation.ipynb` `lowlight` cell:** 1000 pulses per point at 10 Hz for the A/B slope (user allowed 10 Hz
+  where A is far from saturation).
+- **`results/saturation_short_2026-10-07/`:**
+  - PMT A's peak anode current flat-tops at ~39 mA at −1550 V (not scope clipping);
+  - PMT B is too noisy to serve as the reference (~2 mV rms pickup, ~100 MHz bursts). The user is swapping it.
+
+**Changed**
+- The peak guard `MAX_PMT_PEAK_V` is 3 V (the user's choice; the 50 Ω input is rated 5 Vrms).
+
+**Fixed**
+- **`RigolScope.record_frames()` recorded untriggered frames at slow trigger rates.** After a recording, a bare
+  `:RUN` left the scope free-running (status `AUTO`) despite `:TRIG:SWE? NORM`. It now re-sends
+  `:TRIG:SWE NORM` + `:RUN` and waits for `WAIT`/`TD` first. The 1 kHz SPE data was unaffected (all scan frames
+  contain the LED pulse).
+
 ## 2026-10-07: SPE calibration
 
 **Added**

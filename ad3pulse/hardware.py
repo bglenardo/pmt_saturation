@@ -559,6 +559,13 @@ class RigolScope(_ResourceBase):
         if n_frames > limit:
             raise ValueError(f"{n_frames} frames requested; the recorder holds {limit} "
                              "at this memory depth")
+        # After a recording the scope is stopped, and a bare :RUN then free-runs
+        # (trigger status AUTO) although :TRIG:SWE? still reports NORM. With slow
+        # triggers (2 Hz) most frames were then untriggered noise. Re-sending the
+        # sweep mode before :RUN restores normal triggering.
+        self._write(":TRIG:SWE NORM")
+        self._write(":RUN")
+        self._wait_status(("WAIT", "TD"), timeout_s=5.0)  # not AUTO
         self._write(":RECord:WRECord:ENABle ON")
         self._write(":RECord:WRECord:PROMpt OFF")
         self._write(f":RECord:WRECord:FRAMes {n_frames}")

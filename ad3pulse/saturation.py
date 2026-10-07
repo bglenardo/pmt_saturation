@@ -1,0 +1,207 @@
+"""PMT saturation (linearity) analysis with a reference PMT.
+
+One LED lights both PMTs: PMT A (device under test) gets far more light than
+PMT B (reference). While B stays linear, its charge is proportional to the
+true light per pulse, so A's departure from proportionality to B is A's
+non-linearity. This cancels the LED's own non-linearity and drift.
+
+Two regimes:
+- short (~100 ns) pulses: space-charge limit on the peak anode current;
+- long (~10 us) pulses: depletion of the charge stored in the base capacitors,
+  which shows up as the current drooping *during* the pulse.
+
+Signs for the long-pulse ratio A(t)/B(t) (normalised to low light): A
+depleting makes it fall late in the pulse; B depleting makes it rise. B has
+fewer base capacitors, so watch for the rise.
+
+Like ``spe.py``, everything works on raw frames (volts, seconds).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from .spe import integrate_charge, window_mask
+
+
+def npe(q_pC, q1_pC: float):
+    """Photoelectrons from charge, using the SPE charge Q1."""
+    return np.asarray(q_pC, dtype=float) / q1_pC
+
+
+def peak_current(v: np.ndarray, t: np.ndarray, window: tuple[float, float],
+                 r_ohm: float = 50.0, smooth: int = 1) -> np.ndarray:
+    """Peak anode current per frame in mA (positive for negative pulses).
+
+    *smooth* > 1 applies a moving average of that many samples first, so the
+    peak of small pulses is not biased up by noise.
+    """
+    mask = window_mask(t, window)
+    x = v[..., mask]
+    if smooth > 1:
+        kernel = np.ones(smooth) / smooth
+        x = np.apply_along_axis(lambda row: np.convolve(row, kernel, mode="valid"), -1, x)
+    return -x.min(axis=-1) / r_ohm * 1e3
+
+
+def binned_charge(v: np.ndarray, t: np.ndarray, edges, r_ohm: float = 50.0) -> np.ndarray:
+    """Charge in pC in each time bin [edges[i], edges[i+1]); shape (..., n_bins)."""
+    return np.stack([integrate_charge(v, t, (lo, hi), r_ohm)
+                     for lo, hi in zip(edges[:-1], edges[1:])], axis=-1)
+
+
+def fwhm(t: np.ndarray, v: np.ndarray) -> float:
+    """Full width at half maximum of a negative pulse (e.g. a mean waveform)."""
+    v = np.asarray(v, dtype=float)
+    i = int(np.argmin(v))
+    half = v[i] / 2
+    left = i
+    while left > 0 and v[left] < half:
+        left -= 1
+    right = i
+    while right < len(v) - 1 and v[right] < half:
+        right += 1
+
+    def cross(a, b):  # linear interpolation of the half-level crossing between samples a, b
+        if v[b] == v[a]:
+            return t[a]
+        return t[a] + (half - v[a]) / (v[b] - v[a]) * (t[b] - t[a])
+
+    return float(cross(right - 1, right) - cross(left, left + 1))
+
+
+@dataclass
+class PointSummary:
+    """Per-intensity-point means for one PMT channel."""
+
+    amplitude_V: float
+    q_mean_pC: float
+    q_err_pC: float  # standard error of the mean
+    peak_mean_mA: float
+    peak_err_mA: float
+    n: int
+
+
+def summarize_point(q_pC: np.ndarray, peak_mA: np.ndarray, amplitude_V: float) -> PointSummary:
+    q = np.asarray(q_pC, dtype=float)
+    p = np.asarray(peak_mA, dtype=float)
+    n = len(q)
+    return PointSummary(amplitude_V, float(q.mean()), float(q.std(ddof=1) / np.sqrt(n)),
+                        float(p.mean()), float(p.std(ddof=1) / np.sqrt(n)), n)
+
+
+@dataclass
+class Linearity:
+    k: float  # test / ref slope in the linear region
+    k_err: float
+    deviation: np.ndarray  # test / (k ref) - 1 per point
+    deviation_err: np.ndarray
+    fit_mask: np.ndarray  # points used for k
+
+
+def linearity(ref, test, fit_range: tuple[float, float], ref_err=None, test_err=None) -> Linearity:
+    """Fit test = k * ref (through the origin) for *ref* inside *fit_range*; return deviations.
+
+    Use per-point means (charges in pC, or N_pe). The fit range should be
+    low light where both PMTs are linear but well above the pedestal.
+    """
+    ref = np.asarray(ref, dtype=float)
+    test = np.asarray(test, dtype=float)
+    ref_err = np.zeros_like(ref) if ref_err is None else np.asarray(ref_err, dtype=float)
+    test_err = np.zeros_like(test) if test_err is None else np.asarray(test_err, dtype=float)
+    mask = (ref >= fit_range[0]) & (ref <= fit_range[1])
+    if mask.sum() < 2:
+        raise ValueError(f"need at least 2 points with ref in {fit_range}, have {mask.sum()}")
+    ratio = test[mask] / ref[mask]
+    rel = np.hypot(test_err[mask] / test[mask], ref_err[mask] / ref[mask])
+    if np.all(rel > 0):
+        w = 1 / (ratio * rel) ** 2
+        k = float(np.sum(w * ratio) / np.sum(w))
+        k_err = float(1 / np.sqrt(np.sum(w)))
+        # inflate by the scatter if the points disagree more than their errors
+        chi2 = float(np.sum(w * (ratio - k) ** 2))
+        if mask.sum() > 1:
+            k_err *= max(1.0, np.sqrt(chi2 / (mask.sum() - 1)))
+    else:
+        k = float(np.mean(ratio))
+        k_err = float(np.std(ratio, ddof=1) / np.sqrt(len(ratio)))
+    dev = test / (k * ref) - 1
+    dev_err = np.abs(dev + 1) * np.sqrt((test_err / test) ** 2 + (ref_err / ref) ** 2 + (k_err / k) ** 2)
+    return Linearity(k, k_err, dev, dev_err, mask)
+
+
+def crossing(x, deviation, level: float) -> float | None:
+    """First x (in increasing x) where the deviation falls to -*level*, interpolated.
+
+    Returns None if it never does. *level* is positive, e.g. 0.05 for 5 %.
+    """
+    x = np.asarray(x, dtype=float)
+    d = np.asarray(deviation, dtype=float)
+    order = np.argsort(x)
+    x, d = x[order], d[order]
+    for i in range(1, len(x)):
+        if d[i] <= -level < d[i - 1]:
+            return float(x[i - 1] + (-level - d[i - 1]) / (d[i] - d[i - 1]) * (x[i] - x[i - 1]))
+    if len(d) and d[0] <= -level:
+        return float(x[0])
+    return None
+
+
+def shape_ratio(test_bins, ref_bins) -> np.ndarray:
+    """Mean binned charge of test / ref per time bin (inputs shaped (frames, bins))."""
+    return np.asarray(test_bins, dtype=float).mean(axis=0) / np.asarray(ref_bins, dtype=float).mean(axis=0)
+
+
+def late_early(bins, early: int | slice, late: int | slice) -> tuple[float, float]:
+    """Late / early mean charge for one channel, from binned_charge output; (ratio, error).
+
+    The error is the standard error from the frame-to-frame spread, so a
+    dim reference gives a noisy ratio rather than a false alarm.
+    """
+    b = np.asarray(bins, dtype=float)
+    e = b[:, early].reshape(len(b), -1).sum(axis=1)
+    lt = b[:, late].reshape(len(b), -1).sum(axis=1)
+    n = len(b)
+    me, ml = e.mean(), lt.mean()
+    r = float(ml / me)
+    if n < 2:
+        return r, float("nan")
+    cov = np.cov(lt, e) / n  # [[var_l, cov], [cov, var_e]] of the means
+    var = r ** 2 * (cov[0, 0] / ml ** 2 + cov[1, 1] / me ** 2 - 2 * cov[0, 1] / (ml * me))
+    return r, float(np.sqrt(max(var, 0.0)))
+
+
+def flag_reference(ratios, errors=None, reference=None, tolerance: float = 0.02,
+                   n_sigma: float = 3.0) -> np.ndarray:
+    """True where the reference PMT's late/early (or other shape) ratio has changed.
+
+    *reference* is the expected value: an index into *ratios*, a list of
+    indices (error-weighted mean), or None for index 0. A point is flagged
+    when it differs by more than *tolerance* (relative) and, if *errors* are
+    given, also by more than *n_sigma* combined errors.
+
+    A change means the reference's pulse shape changed with intensity: either
+    the reference is depleting (B has fewer base capacitors) or the LED's
+    own time profile changed. Points flagged here make the A/B ratio suspect.
+    """
+    r = np.asarray(ratios, dtype=float)
+    err = None if errors is None else np.asarray(errors, dtype=float)
+    idx = np.atleast_1d(0 if reference is None else reference)
+    if err is None:
+        r0, e0 = float(np.mean(r[idx])), 0.0
+    else:
+        w = 1 / err[idx] ** 2
+        r0, e0 = float(np.sum(w * r[idx]) / np.sum(w)), float(1 / np.sqrt(np.sum(w)))
+    diff = np.abs(r - r0)
+    flag = diff > tolerance * abs(r0)
+    if err is not None:
+        flag &= diff > n_sigma * np.hypot(err, e0)
+    return flag
+
+
+__all__ = [
+    "npe", "peak_current", "binned_charge", "fwhm", "PointSummary", "summarize_point",
+    "Linearity", "linearity", "crossing", "shape_ratio", "late_early", "flag_reference",
+]
