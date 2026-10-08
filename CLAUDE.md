@@ -27,7 +27,7 @@ The first milestone, **single-photoelectron (SPE) calibration of both PMTs, is d
   - one side → 330 Ω in series with the LED (turn-on ~1.6 V);
   - other side → **Rigol Ch3** (1 MΩ). This is the trigger.
 - **PMT A** (higher voltage): ISEG **ch0**, negative polarity → **Rigol Ch1**, scope 50 Ω input.
-- **Ch4 (added 2026-10-08):** dynode-8 pickoff through 4.7 nF (assumed on PMT A; confirm). Its signal is
+- **Ch4 (added 2026-10-08):** PMT A's dynode-8 pickoff through 4.7 nF. Its signal is
   positive. Run it at 50 Ω and at 1 MΩ, and stop 1 MΩ once it reaches ~3–4 V.
 - **PMT B:** ISEG **ch1**, negative polarity → **Rigol Ch2**, scope 50 Ω input. **Replaced on 2026-10-07**
   by a tube of the same type as A (the original B was too noisy; base design suspected). B's SPE values in
@@ -90,7 +90,9 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
   `timing`, `scan`, `choose`, `calibrate`, `load_saved`, `fit`, `close`, `emergency`.
 - `pmt_bias_test.ipynb`: bias test. Ramp up, one Rigol acquisition, ramp down (`finally:`).
 - `overlay_waveforms.ipynb`: overlays from the legacy AD3 sweep.
-- `saturation.ipynb`: **saturation studies** (`REGIME = "short"` or `"long"`). Tags: `parameters`, `helpers`,
+- `saturation_r2.ipynb`: **round 2** (k scan, dynode-8 Ch4 at 50 Ω and 1 MΩ, finer scans). Its analysis is in
+  `ad3pulse/sat_analysis.py` and `ad3pulse/sat_plots.py`.
+- `saturation.ipynb`: **saturation studies, round 1** (`REGIME = "short"` or `"long"`). Tags: `parameters`, `helpers`,
   `connect`, `timing`, `reach`, `scan`, `load_saved`, `analyze`, `close`, `emergency`.
 - `scripts/run_saturation_chain.sh`: unattended chain. SPE calibration → short and long saturation scans → HV off,
   with the HV-off step in an EXIT trap. Its processes survive stopping the Claude background task.

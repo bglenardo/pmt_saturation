@@ -24,7 +24,8 @@ def test_linearity_recovers_saturation_point() -> None:
     assert n5 == pytest.approx(n_sat / 19, rel=0.03)
     assert crossing(n, lin.deviation, 0.99) is None
     # an isolated noisy dip before the real bend is ignored
-    assert crossing([1, 2, 3, 4, 5], [0, -0.08, 0, -0.04, -0.2], 0.05) == pytest.approx(4 + 1 / 16)
+    assert crossing([1, 2, 3, 4, 5, 6], [0, -0.08, 0, -0.04, -0.2, -0.3], 0.05) == pytest.approx(4 + 1 / 16)
+    assert crossing([1, 2, 3, 4], [0, 0, 0.01, -0.07], 0.05) is None          # one low last point
 
 
 def test_linearity_weights_with_errors() -> None:
@@ -115,14 +116,16 @@ class FakeScope:
     """Records frames of a negative pulse whose height depends on the LED amplitude."""
 
     def __init__(self, peaks: dict[int, float], ad3: FakeAD3) -> None:
-        self.peaks = peaks  # channel -> volts per LED volt
+        self.peaks = peaks  # channel -> volts per LED volt (negative pulse; a negative value = positive pulse)
         self.ad3 = ad3
         self.scale: dict[int, float] = {}
         self.offset: dict[int, float] = {}
         self.recorded: list[int] = []
+        self.impedance: dict[int, str] = {}
+        self.omeg_gain = 1.0          # signal multiplier while a channel is at 1 MOhm
 
     def configure_channel(self, ch, scale, offset=0.0, coupling="DC", impedance="OMEG"):
-        self.scale[ch], self.offset[ch] = scale, offset
+        self.scale[ch], self.offset[ch], self.impedance[ch] = scale, offset, impedance
 
     def configure_timebase(self, *a, **k): pass
     def configure_edge_trigger(self, *a, **k): pass
@@ -130,7 +133,7 @@ class FakeScope:
     def _write(self, cmd): pass
     def close(self): pass
 
-    def record_frames(self, n_frames, channels, timeout_s=60.0):
+    def record_frames(self, n_frames, channels, timeout_s=60.0, mode="NORM"):
         self.recorded.append(n_frames)
         t = np.arange(-500, 500) * 1e-9
         codes, pres = {}, {}
@@ -139,7 +142,8 @@ class FakeScope:
             pres[ch] = Preamble(1, 0, len(t), 1, 1e-9, -500e-9, 0, yinc, 0, 0)
             v = np.zeros((n_frames, len(t)))
             if ch in self.peaks:
-                v[:, 600:620] = -self.peaks[ch] * self.ad3.amplitudes[-1]
+                gain = self.omeg_gain if self.impedance.get(ch) == "OMEG" else 1.0
+                v[:, 600:620] = -self.peaks[ch] * self.ad3.amplitudes[-1] * gain
                 lo, hi = screen_range(self.scale[ch], self.offset[ch])
                 v = np.clip(v, lo, hi)
             codes[ch] = np.round(v / yinc + 30000).astype(np.uint16)
@@ -200,3 +204,76 @@ def test_linearity_fit_mask_and_light_scale() -> None:
     assert light[0] == a[0] and light[-1] == pytest.approx(3000, rel=0.03)
     dev = a / light - 1
     assert dev[-1] == pytest.approx(-0.6, abs=0.03)
+
+
+def test_positive_pulse_channel_autorange_and_impedance_switch(tmp_path) -> None:
+    from ad3pulse.acquire import ScopeSettings as SS
+    ad3 = FakeAD3()
+    scope = FakeScope({1: 0.1, 4: -0.4}, ad3)          # Ch4: positive pulses (dynode pickoff)
+    settings = SS(pmt_scale_v_div={1: 0.01, 4: 0.01}, polarity={4: +1})
+    s = ScopeSession("fake", settings, ad3, rate_hz=2.0, out_dir=tmp_path,
+                     scope_factory=lambda r: scope).open()
+    assert scope.offset[4] == pytest.approx(-0.03)      # positive pulses: trace shifted down
+    assert screen_range(0.01, -0.03) == pytest.approx((-0.01, 0.07))
+    scales = autorange(s, 2.0, (-500e-9, -300e-9), max_peak_v={1: 2.0, 4: 2.0})
+    assert scales[4] == 0.2 and scales[1] == 0.05       # Ch4 +0.8 V, Ch1 -0.2 V
+    s.set_impedance(4, "OMEG")                           # first 1 MOhm use: coarsest 1 MOhm step
+    assert scope.impedance[4] == "OMEG" and settings.pmt_scale_v_div[4] == 2.0
+    s.set_scale(4, 0.5)
+    s.set_impedance(4, "FIFTy")                          # back to 50 Ohm: its last scale returns
+    assert scope.impedance[4] == "FIFTy" and settings.pmt_scale_v_div[4] == 0.2
+    s.set_impedance(4, "OMEG")
+    assert settings.pmt_scale_v_div[4] == 0.5
+    fs = s.acquire(2.0, 3, "x", save=False)
+    assert fs.meta["pmt_impedance"]["4"] == "OMEG" and fs.meta["pmt_polarity"]["4"] == 1
+
+
+def test_per_channel_peak_limit(tmp_path) -> None:
+    from ad3pulse.acquire import ScopeSettings as SS
+    ad3 = FakeAD3()
+    scope = FakeScope({1: 0.1, 4: -2.0}, ad3)           # Ch4 +4 V at 2 V LED
+    settings = SS(pmt_scale_v_div={1: 0.05, 4: 1.0}, polarity={4: +1})
+    s = ScopeSession("fake", settings, ad3, rate_hz=2.0, out_dir=tmp_path,
+                     scope_factory=lambda r: scope).open()
+    with pytest.raises(PeakLimitExceeded) as exc:
+        autorange(s, 2.0, (-500e-9, -300e-9), max_peak_v={1: 2.0, 4: 3.0})
+    assert exc.value.channel == 4
+    autorange(s, 2.0, (-500e-9, -300e-9), max_peak_v={1: 2.0})  # Ch4 unlimited: no error
+
+
+def test_step_height_and_count_pulses() -> None:
+    from ad3pulse.saturation import count_pulses, step_height
+    t = np.arange(-500, 1500) * 1e-9
+    v = np.zeros((3, len(t)))
+    v[:, t >= 100e-9] = 0.25                      # 1 MOhm-like step of 0.25 V
+    np.testing.assert_allclose(step_height(v, t, (-400e-9, -50e-9), (600e-9, 1400e-9)), 0.25)
+    w = np.zeros((2, len(t)))
+    for k in (100, 300, 700):                     # three negative SPE-like pulses in frame 0
+        w[0, 500 + k:500 + k + 4] = -0.011
+    w[1, 500 + 50:500 + 54] = -0.011
+    w[1, 200:204] = -0.011                        # outside the window
+    n = count_pulses(w, t, (0, 1000e-9), 0.005)
+    assert n.tolist() == [3, 1]
+    assert count_pulses(-w, t, (0, 1000e-9), 0.005, polarity=+1).tolist() == [3, 1]
+
+
+def test_smooth_log_fit_recovers_curve() -> None:
+    from ad3pulse.saturation import smooth_log_fit
+    rng = np.random.default_rng(5)
+    x = np.linspace(1.9, 3.0, 25)
+    truth = np.exp(3 * (x - 1.9) - 0.8 * (x - 1.9) ** 2) * 0.05
+    err = 0.05 * truth
+    y = truth + err * rng.standard_normal(len(x))
+    fit = smooth_log_fit(x, y, err, deg=3)
+    assert np.all(np.abs(fit.value(x) - truth) < 3 * fit.error(x))   # consistent with its own errors
+    assert np.all(fit.error(x[3:-3]) < 0.03 * truth[3:-3])          # smoothing beats single-point errors
+
+
+def test_align_shift_and_rise_time() -> None:
+    from ad3pulse.saturation import align_shift, rise_time
+    t = np.arange(0, 400) * 1e-9
+    a = np.exp(-0.5 * ((t - 150e-9) / 10e-9) ** 2)
+    b = np.exp(-0.5 * ((t - 170e-9) / 10e-9) ** 2)
+    assert align_shift(t, a, b) == pytest.approx(-20e-9)
+    ramp = np.clip((t - 100e-9) / 100e-9, 0, 1)
+    assert rise_time(t, -ramp) == pytest.approx(80e-9, abs=2e-9)

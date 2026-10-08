@@ -1,0 +1,228 @@
+"""Plots for the round-2 saturation analysis (``ad3pulse.sat_analysis``).
+
+Each function returns its matplotlib Figure; the notebook saves and shows it.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from .saturation import align_shift
+from .spe import window_mask
+
+COLORS = {"A anode charge (PE)": "C0", "A anode peak (mA)": "C9",
+          "dynode 8, 50 Ohm charge (pC)": "C3", "dynode 8, 50 Ohm peak (mA)": "C1",
+          "dynode 8, 1 MOhm step (V)": "C2",
+          "B anode charge (PE)": "C4", "B anode peak (mA)": "C6"}
+MARKERS = {"up": "o", "down": "s", "low": "^"}
+
+
+def _plt():
+    import matplotlib.pyplot as plt
+    return plt
+
+
+def plot_ratio_scan(rows: list[dict], kres: dict, title: str = ""):
+    """Both PMTs' zero-PE mu and mean PE against LED voltage, and k against LED voltage."""
+    plt = _plt()
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
+    amp = np.array([r["amplitude_V"] for r in rows])
+    ax = axes[0]
+    for ch, name, col in ((1, "PMT A", "C0"), (2, "PMT B", "C1")):
+        mu = np.array([r[ch]["mu"] for r in rows]); me = np.array([r[ch]["mu_err"] for r in rows])
+        pe = np.array([r[ch]["pe"] for r in rows]); pee = np.array([r[ch]["pe_err"] for r in rows])
+        ok = np.isfinite(mu) & np.isfinite(me) & (mu > 2 * me) & (mu < 4)
+        ax.errorbar(amp[ok], mu[ok], yerr=me[ok], fmt="o", ms=4, capsize=2, color=col, label=f"{name}: zero-PE μ")
+        okp = pe > 2 * pee
+        ax.errorbar(amp[okp], pe[okp], yerr=pee[okp], fmt="s", ms=4, mfc="none", capsize=2, color=col,
+                    label=f"{name}: mean charge / Q1")
+    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("photoelectrons per pulse")
+    ax.set_title(title or "joint occupancy scan", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    ax = axes[1]
+    ok = np.isfinite(kres["k"]) & np.isfinite(kres["k_err"]) & (kres["k_err"] < kres["k"])
+    use = kres["use"]
+    ax.errorbar(amp[ok & ~use], kres["k"][ok & ~use], yerr=kres["k_err"][ok & ~use], fmt="o", ms=4, mfc="none",
+                color="0.5", capsize=2, label="not used (B too dim or A too bright)")
+    ax.errorbar(amp[use], kres["k"][use], yerr=kres["k_err"][use], fmt="o", ms=4, color="C3", capsize=2, label="used")
+    ax.axhline(kres["k_mean"], color="k", ls="--", lw=0.8,
+               label=f"k = {kres['k_mean']:.0f} ± {kres['k_mean_err']:.0f} (χ²/dof {kres['chi2_dof']:.2f})")
+    ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("A PE (charge) / B zero-PE μ")
+    ax.set_title("light ratio k", fontsize=9); ax.grid(alpha=.3); ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
+def plot_vs_led(points, metrics: dict, regime: str):
+    """Pulse area and pulse height against LED voltage for A, B and dynode 8."""
+    plt = _plt()
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8.5))
+    amp = np.array([p.amp for p in points]); sweep = np.array([p.sweep for p in points])
+    groups = [(axes[0, 0], ("A anode charge (PE)", "B anode charge (PE)"), "pulse area (PE)"),
+              (axes[0, 1], ("A anode peak (mA)", "B anode peak (mA)"), "pulse height (mA into 50 Ω)"),
+              (axes[1, 0], ("dynode 8, 50 Ohm charge (pC)", "dynode 8, 1 MOhm step (V)"), "dynode 8: area (pC) / 1 MΩ step (V)"),
+              (axes[1, 1], ("dynode 8, 50 Ohm peak (mA)",), "dynode 8 pulse height (mA into 50 Ω)")]
+    for ax, names, ylabel in groups:
+        for name in names:
+            if name not in metrics:
+                continue
+            val, err = metrics[name]
+            for sw in ("up", "down"):
+                sel = (sweep == sw) & np.isfinite(val) & (val > 0)
+                ax.errorbar(amp[sel], val[sel], yerr=err[sel], fmt=MARKERS[sw], ms=4, capsize=2,
+                            color=COLORS.get(name), mfc="none" if sw == "down" else None,
+                            label=f"{name} ({sw})")
+        ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel(ylabel)
+        ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    fig.suptitle(f"{regime} pulses: response against LED voltage", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def plot_a_vs_b(points, ls: dict, k: float, regime: str):
+    """A against B, and B against LED voltage with the smooth light-curve fit."""
+    plt = _plt()
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
+    amp = ls["amp"]; sweep = np.array([p.sweep for p in points])
+    a = np.array([p.r50["ch"][1]["pe"] for p in points]); ae = np.array([p.r50["ch"][1]["pe_err"] for p in points])
+    ax = axes[0]
+    for sw in ("up", "down"):
+        sel = sweep == sw
+        ax.errorbar(ls["b"][sel], a[sel], xerr=ls["b_err"][sel], yerr=ae[sel], fmt=MARKERS[sw], ms=4, capsize=2, label=sw)
+    xx = np.geomspace(max(np.nanmin(ls["b"][ls["b"] > 0]), 1e-3), np.nanmax(ls["b"]), 50)
+    ax.plot(xx, k * xx, "k--", lw=0.8, label=f"linear, k = {k:.0f}")
+    ax.set_xscale("log"); ax.set_yscale("log"); ax.set_xlabel("B per pulse"); ax.set_ylabel("A (PE per pulse)")
+    ax.set_title(f"{regime}: A against the B reference", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    ax = axes[1]
+    sig = ls["b_sig"]
+    ax.errorbar(amp[sig], ls["b"][sig], yerr=ls["b_err"][sig], fmt="o", ms=4, capsize=2, label="B (significant)")
+    ax.errorbar(amp[~sig], np.maximum(ls["b"][~sig], 1e-4), yerr=ls["b_err"][~sig], fmt="o", ms=4, mfc="none",
+                color="0.6", capsize=2, label="B (not used)")
+    vv = np.linspace(ls["v_on"], amp.max(), 100)
+    f = ls["fit"]
+    ax.plot(vv, f.value(vv), "C3", lw=1, label="smooth fit (light curve / k)")
+    ax.fill_between(vv, f.value(vv) - f.error(vv), f.value(vv) + f.error(vv), color="C3", alpha=0.2)
+    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
+    ax.set_title("light curve from B", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
+def plot_linearity(points, ls: dict, lins: dict, regime: str, x2: tuple[str, np.ndarray]):
+    """Deviation from linear of every metric, against true light and against *x2* (anode peak or charge)."""
+    plt = _plt()
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    sweep = np.array([p.sweep for p in points])
+    for ax, (xname, x) in zip(axes, (("true light (A PE per pulse)", ls["light"]), x2)):
+        for name, lin in lins.items():
+            if not np.isfinite(lin["scale"]):
+                continue
+            for sw in ("up", "down"):
+                sel = (sweep == sw) & np.isfinite(lin["dev"]) & (x > 0)
+                c5 = lin["cross"][0.05]
+                lab = f"{name}" + (f" (5 % at {c5:.3g})" if c5 and sw == "up" and xname.startswith("true") else "")
+                ax.errorbar(x[sel], 100 * lin["dev"][sel], yerr=100 * lin["dev_err"][sel], fmt=MARKERS[sw], ms=3.5,
+                            capsize=2, color=COLORS.get(name), mfc="none" if sw == "down" else None,
+                            label=lab if sw == "up" else None)
+        for lv in (-5, -10):
+            ax.axhline(lv, color="0.6", ls=":", lw=0.8)
+        ax.axhline(0, color="k", lw=0.6)
+        ax.set_xscale("log"); ax.set_ylim(-100, 40)
+        ax.set_xlabel(xname); ax.set_ylabel("deviation from linear (%)")
+        ax.grid(alpha=.3, which="both")
+    axes[0].legend(fontsize=7)
+    fig.suptitle(f"{regime} pulses: linearity of the anode and the dynode-8 pickoff (open = down-sweep)", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _levels(light, n):
+    order = np.argsort(light)
+    idx = np.unique(np.linspace(0, len(order) - 1, n).round().astype(int))
+    return [int(order[i]) for i in idx]
+
+
+def plot_shapes_ch1_ch4(points, light, cfg: dict, regime: str, n_levels: int = 6):
+    """Anode (Ch1) and dynode-8 (Ch4, 50 Ohm) mean pulses overlaid, one panel per light level,
+    plus Ch4(t)/Ch1(t) for all levels and (if present) the 1 MOhm step against Ch1's integral."""
+    plt = _plt()
+    up = [i for i, p in enumerate(points) if p.sweep == "up" and 4 in p.r50["ch"]]
+    if not up:
+        return None
+    sel = [up[i] for i in _levels(np.array([light[i] for i in up]), n_levels)]
+    ncol = 3
+    nrow = int(np.ceil(len(sel) / ncol)) + 1
+    fig, axes = plt.subplots(nrow, ncol, figsize=(15, 3.3 * nrow), squeeze=False)
+    t = points[sel[0]].r50["t"]
+    unit, ts = ("µs", 1e6) if regime == "long" else ("ns", 1e9)
+    sig = window_mask(t, (cfg["signal"][0] - (t[1] - t[0]) * 20, cfg["signal"][1]))
+    ref = points[sel[0]].r50
+    shift = align_shift(t[sig], -ref["ch"][1]["mean_v"][sig], ref["ch"][4]["mean_v"][sig],
+                        max_shift_s=50e-9 if regime == "short" else 500e-9)
+    cmap = plt.get_cmap("viridis")
+    ratio_ax = axes[-1, 0]
+    for j, i in enumerate(sel):
+        p = points[i]
+        a = -p.r50["ch"][1]["mean_v"]; d = p.r50["ch"][4]["mean_v"]
+        d_al = np.roll(d, int(round(shift / (t[1] - t[0]))))
+        ax = axes.flat[j]
+        ax.plot(t * ts, a / np.max(a[sig]), color="C0", lw=1, label="anode Ch1 (−V)")
+        ax.plot(t * ts, d_al / np.max(d_al[sig]), color="C3", lw=1, label="dynode 8 Ch4, 50 Ω (aligned)")
+        ax.set_xlim(cfg["signal"][0] * ts - (2 if regime == "long" else 20), cfg["signal"][1] * ts)
+        ax.set_title(f"LED {p.amp:.3f} V, light ≈ {light[i]:.3g} PE", fontsize=9)
+        ax.set_xlabel(f"time ({unit})"); ax.set_ylabel("normalised to peak"); ax.grid(alpha=.3)
+        if j == 0:
+            ax.legend(fontsize=7)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(a > 0.05 * np.max(a[sig]), d_al / a, np.nan)
+        ratio_ax.plot(t * ts, ratio / np.nanmedian(ratio[sig]) if np.isfinite(ratio[sig]).any() else ratio,
+                      color=cmap(j / max(len(sel) - 1, 1)), lw=1, label=f"{light[i]:.3g} PE")
+    for k in range(len(sel), (nrow - 1) * ncol):
+        axes.flat[k].set_visible(False)
+    ratio_ax.set_title("Ch4(t) / Ch1(t), each normalised to its median", fontsize=9)
+    ratio_ax.set_xlabel(f"time ({unit})"); ratio_ax.grid(alpha=.3); ratio_ax.legend(fontsize=6)
+    ratio_ax.set_xlim(cfg["signal"][0] * ts, cfg["signal"][1] * ts)
+    ax = axes[-1, 1]
+    have1m = [i for i in sel if points[i].r1m is not None and 4 in points[i].r1m["ch"]]
+    for j, i in enumerate(have1m):
+        p = points[i]
+        a = -p.r1m["ch"][1]["mean_v"]
+        cum = np.cumsum(a); cum /= np.max(np.abs(cum)) if np.max(np.abs(cum)) > 0 else 1
+        step = p.r1m["ch"][4]["mean_v"]; step = step / np.max(np.abs(step)) if np.max(np.abs(step)) > 0 else step
+        col = cmap(j / max(len(have1m) - 1, 1))
+        ax.plot(t * ts, step, color=col, lw=1, label=f"1 MΩ step, {light[i]:.3g} PE")
+        ax.plot(t * ts, cum, color=col, lw=0.8, ls="--")
+    ax.set_title("1 MΩ step (solid) vs ∫ anode current (dashed), normalised", fontsize=9)
+    ax.set_xlabel(f"time ({unit})"); ax.grid(alpha=.3)
+    if have1m:
+        ax.legend(fontsize=6)
+    axes[-1, 2].set_visible(False)
+    fig.suptitle(f"{regime} pulses: anode vs dynode-8 pulse shapes", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def plot_shape_metrics(points, light, regime: str):
+    """Pulse-shape metrics against light for the anode (Ch1) and dynode 8 (Ch4, 50 Ohm)."""
+    plt = _plt()
+    names = (("late_early", "late / early charge"),) if regime == "long" else \
+            (("fwhm_s", "FWHM (ns)"), ("rise_s", "10–90 % rise (ns)"))
+    fig, axes = plt.subplots(1, len(names), figsize=(6.5 * len(names), 4.3), squeeze=False)
+    sweep = np.array([p.sweep for p in points])
+    for ax, (key, label) in zip(axes[0], names):
+        for ch, name, col in ((1, "anode Ch1", "C0"), (4, "dynode 8 Ch4", "C3")):
+            v = np.array([p.r50["ch"].get(ch, {}).get(key, np.nan) for p in points], dtype=float)
+            if regime == "short":
+                v = v * 1e9
+            for sw in ("up", "down"):
+                sel = sweep == sw
+                ax.plot(light[sel], v[sel], MARKERS[sw], ms=4, color=col, mfc="none" if sw == "down" else None,
+                        label=f"{name} ({sw})")
+        ax.set_xscale("log"); ax.set_xlabel("true light (A PE per pulse)"); ax.set_ylabel(label)
+        ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    fig.suptitle(f"{regime} pulses: pulse-shape metrics", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+__all__ = ["plot_ratio_scan", "plot_vs_led", "plot_a_vs_b", "plot_linearity", "plot_shapes_ch1_ch4",
+           "plot_shape_metrics"]

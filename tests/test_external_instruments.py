@@ -255,6 +255,15 @@ def test_rigol_record_frames_reads_each_frame(tmp_path) -> None:
     assert loaded.meta["amplitude_V"] == 1.7
 
 
+def test_rigol_record_frames_max_mode() -> None:
+    fake = _recorder_fake(2)
+    frames = RigolScope(instrument=fake).record_frames(2, channels=(1, 2), mode="max")
+    assert ":WAV:MODE MAX" in fake.commands and ":WAV:MODE NORM" not in fake.commands
+    assert frames.meta["replay_mode"] == "MAX"
+    with pytest.raises(ValueError, match="RAW"):
+        RigolScope(instrument=_recorder_fake(1)).record_frames(1, mode="RAW")
+
+
 def test_rigol_record_frames_rejects_too_many() -> None:
     fake = _recorder_fake(1)
     with pytest.raises(ValueError, match="holds 126976"):

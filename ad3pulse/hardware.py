@@ -547,14 +547,21 @@ class RigolScope(_ResourceBase):
 
     def record_frames(self, n_frames: int, channels: tuple[int, ...] = (1, 2),
                       timeout_s: float = 60.0,
-                      progress: Callable[[int, int], None] | None = None) -> FrameSet:
+                      progress: Callable[[int, int], None] | None = None,
+                      mode: str = "NORM") -> FrameSet:
         """Record *n_frames* triggers in hardware, then read every frame back.
 
-        Replay frames are read in NORMal waveform mode: in RAW mode the scope
-        returns the same data for every frame. Selecting a frame is
-        asynchronous, so each selection is followed by *OPC? (without it
-        about 1 in 6 reads returned the previous frame).
+        Replay frames are read in NORMal waveform mode by default: in RAW mode
+        the scope returns the same data for every frame. NORM gives only the
+        ~1000 screen points; *mode* = "MAX" reads internal memory when the
+        scope is stopped (guide 3.28.2) and is being evaluated for full-depth
+        replay. Selecting a frame is asynchronous, so each selection is
+        followed by *OPC? (without it about 1 in 6 reads returned the
+        previous frame).
         """
+        mode = mode.upper()
+        if mode not in ("NORM", "MAX"):
+            raise ValueError(f"replay mode {mode!r}: use NORM or MAX (RAW repeats one frame)")
         limit = self.max_record_frames()
         if n_frames > limit:
             raise ValueError(f"{n_frames} frames requested; the recorder holds {limit} "
@@ -582,7 +589,7 @@ class RigolScope(_ResourceBase):
         if recorded < n_frames:
             raise InstrumentError(f"Recorder stopped after {recorded} of {n_frames} frames")
 
-        self._write(":WAV:MODE NORM")
+        self._write(f":WAV:MODE {mode}")
         self._write(":WAV:FORM WORD")
         self._write(":RECord:WREPlay:FCURrent 1")
         self._query("*OPC?")
@@ -607,7 +614,7 @@ class RigolScope(_ResourceBase):
             if progress is not None:
                 progress(i + 1, n_frames)
         self._write(":RECord:WRECord:ENABle OFF")
-        meta = {"idn": self.idn, "n_frames": n_frames,
+        meta = {"idn": self.idn, "n_frames": n_frames, "replay_mode": mode,
                 "sample_rate_Hz": 1.0 / pres[channels[0]].xincrement}
         return FrameSet(time_s=pres[channels[0]].times(points), codes=codes,
                         preambles=pres, meta=meta)

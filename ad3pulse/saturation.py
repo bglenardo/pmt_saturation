@@ -149,12 +149,14 @@ def light_scale(test, ref, k: float, use_ref) -> np.ndarray:
     return np.where(np.asarray(use_ref, dtype=bool), k * ref, test)
 
 
-def crossing(x, deviation, level: float) -> float | None:
+def crossing(x, deviation, level: float, min_run: int = 2) -> float | None:
     """x where the deviation falls to -*level* for good, interpolated (*level* > 0, e.g. 0.05).
 
     Points are taken in increasing x; the crossing is the last downward pass
     through -*level* after which every point stays below it, so a single
-    noisy dip does not count. Returns None if the curve does not end below.
+    noisy dip does not count. The final run below must have at least
+    *min_run* points (a lone low last point is not a crossing). Returns None
+    if the curve does not end below.
     """
     x = np.asarray(x, dtype=float)
     d = np.asarray(deviation, dtype=float)
@@ -166,6 +168,8 @@ def crossing(x, deviation, level: float) -> float | None:
     if not len(above):
         return float(x[0])
     i = above[-1] + 1  # first point of the final run below -level
+    if len(d) - i < min_run:
+        return None
     return float(x[i - 1] + (-level - d[i - 1]) / (d[i] - d[i - 1]) * (x[i] - x[i - 1]))
 
 
@@ -248,7 +252,109 @@ def burst_frames(v_pre: dict, pulser_height=None, min_pp_v: float = 0.02, n_sigm
     return bad
 
 
+def step_height(v: np.ndarray, t: np.ndarray, pre: tuple[float, float],
+                plateau: tuple[float, float]) -> np.ndarray:
+    """Per-frame step height: mean over *plateau* minus mean over *pre* (volts).
+
+    For a pickoff into 1 MOhm the trace integrates the signal charge: it steps
+    by ~Q/C and decays only with RC ~ ms, so the step height measures charge.
+    """
+    return v[..., window_mask(t, plateau)].mean(axis=-1) - v[..., window_mask(t, pre)].mean(axis=-1)
+
+
+def count_pulses(v: np.ndarray, t: np.ndarray, window: tuple[float, float], threshold_v: float,
+                 polarity: int = -1) -> np.ndarray:
+    """Number of threshold crossings in the pulse direction per frame (photon counting).
+
+    Counts transitions from below to beyond |threshold| (negative pulses for
+    polarity -1). Valid while single-PE pulses don't pile up.
+    """
+    x = -polarity * np.asarray(v, dtype=float)[..., window_mask(t, window)]
+    x = -x  # pulse direction is now positive
+    above = x > abs(threshold_v)
+    return (above[..., 1:] & ~above[..., :-1]).sum(axis=-1)
+
+
+@dataclass
+class SmoothFit:
+    """log y = polynomial(x) fitted with weights; evaluate with value() and error()."""
+
+    coef: np.ndarray
+    cov: np.ndarray
+    x0: float  # centring of x for numerical stability
+
+    def value(self, x) -> np.ndarray:
+        return np.exp(np.polyval(self.coef, np.asarray(x, dtype=float) - self.x0))
+
+    def error(self, x) -> np.ndarray:
+        """1-sigma error of value(x) from the coefficient covariance."""
+        x = np.asarray(x, dtype=float) - self.x0
+        deg = len(self.coef) - 1
+        jac = np.stack([x ** (deg - i) for i in range(deg + 1)], axis=-1)
+        var_log = np.einsum("...i,ij,...j->...", jac, self.cov, jac)
+        return self.value(x + self.x0) * np.sqrt(np.maximum(var_log, 0))
+
+
+def smooth_log_fit(x, y, yerr, deg: int = 3) -> SmoothFit:
+    """Weighted fit of log(y) against x with a polynomial of *deg*.
+
+    Used for the light curve: B's signal against LED voltage, which is smooth
+    and monotone, so each point's light comes from all points.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+    ok = (y > 0) & (yerr > 0)
+    if ok.sum() < deg + 2:
+        raise ValueError(f"need at least {deg + 2} positive points, have {ok.sum()}")
+    x0 = float(np.mean(x[ok]))
+    w = y[ok] / yerr[ok]  # 1 / sigma of log y
+    coef, cov = np.polyfit(x[ok] - x0, np.log(y[ok]), deg, w=w, cov="unscaled")
+    # Weighting by the measured y favours upward fluctuations where the signal is
+    # small (biasing the fit high there); refit with the fitted value instead.
+    w = np.exp(np.polyval(coef, x[ok] - x0)) / yerr[ok]
+    coef, cov = np.polyfit(x[ok] - x0, np.log(y[ok]), deg, w=w, cov="unscaled")
+    resid = (np.log(y[ok]) - np.polyval(coef, x[ok] - x0)) * w
+    dof = ok.sum() - deg - 1
+    chi2 = float(np.sum(resid ** 2))
+    if dof > 0 and chi2 / dof > 1:
+        cov = cov * chi2 / dof  # inflate if points scatter more than their errors
+    return SmoothFit(coef, cov, x0)
+
+
+def align_shift(t: np.ndarray, a: np.ndarray, b: np.ndarray, max_shift_s: float = 50e-9) -> float:
+    """Time shift (s) to add to *b*'s time axis so it best matches *a* (cross-correlation)."""
+    dt = float(t[1] - t[0])
+    n = max(1, int(round(max_shift_s / dt)))
+    a = np.asarray(a, dtype=float) - np.mean(a)
+    b = np.asarray(b, dtype=float) - np.mean(b)
+    best, best_k = -np.inf, 0
+    for k in range(-n, n + 1):
+        c = float(np.dot(a, np.roll(b, k)))
+        if c > best:
+            best, best_k = c, k
+    return best_k * dt
+
+
+def rise_time(t: np.ndarray, v: np.ndarray, lo: float = 0.1, hi: float = 0.9) -> float:
+    """10-90 % rise time of a pulse (sign-independent) from its start to its extreme."""
+    v = np.asarray(v, dtype=float)
+    x = v if abs(v.max()) >= abs(v.min()) else -v
+    i = int(np.argmax(x))
+    peak = x[i]
+
+    def first_cross(level):
+        idx = np.flatnonzero(x[: i + 1] >= level * peak)
+        j = int(idx[0])
+        if j == 0:
+            return float(t[0])
+        return float(t[j - 1] + (level * peak - x[j - 1]) / (x[j] - x[j - 1]) * (t[j] - t[j - 1]))
+
+    return first_cross(hi) - first_cross(lo)
+
+
 __all__ = [
     "npe", "peak_current", "binned_charge", "fwhm", "PointSummary", "summarize_point",
+    "step_height", "count_pulses", "SmoothFit", "smooth_log_fit", "align_shift", "rise_time",
     "Linearity", "linearity", "light_scale", "crossing", "shape_ratio", "late_early", "flag_reference", "burst_frames",
 ]

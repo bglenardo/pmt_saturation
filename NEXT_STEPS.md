@@ -193,12 +193,19 @@ valid and no k can be taken from that scan. **Step 3 must auto-range each channe
   - `burst_frames`, `linearity`, `light_scale` and `crossing` (`ad3pulse/saturation.py`);
   - `ScopeSession` and `autorange` (`ad3pulse/acquire.py`).
 
-## To confirm with the user when resuming
-- **Which PMT's dynode 8 is on Ch4?** I'm assuming PMT A, the device under test.
-- **The `CH4_1M_STOP_V` value:** 3 V (the conservative end of "3–4 V") unless told otherwise.
-- **Time budget:** the 1 MΩ second recording roughly doubles the step-4 scan time, up to the cutoff (~2.5 h →
-  ~4 h). Alternatively, take 1 MΩ only at every second point.
-- **Re-calibrate the SPE** before the run, or reuse 0.904 / 1.09 pC?
+## Progress (2026-10-08)
+- **Steps 0–1:** done.
+- **Code for steps 2–5:** written and tested offline in `saturation_r2.ipynb`, `ad3pulse/sat_analysis.py` and
+  `ad3pulse/sat_plots.py`.
+- **Next, on hardware** (HV on, box dark):
+  1. `replay_test`, to choose MAX/20k or NORM/1k for long pulses;
+  2. then the unattended chain: SPE calibration → ratio scan → short scan → long scan → analysis → HV off.
+
+## Decisions (user, 2026-10-08)
+- **Ch4 is PMT A's dynode 8.**
+- **1 MΩ stops at 3 V** (`CH4_1M_STOP_V = 3.0`).
+- **1 MΩ is recorded at every LED point** (until the stop).
+- **SPE re-calibration of both PMTs first**, at the start of the run.
 
 ## Hardware prerequisites
 - **HV is off now.** Before step 2: confirm the box is dark, then ramp both channels to −1550 V with

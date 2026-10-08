@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-10-08: round-2 code (k scan, Ch4 dynode-8 pickoff, finer scans); tested offline only
+
+**Added**
+- **`saturation_r2.ipynb`** (round 2; `saturation.ipynb` stays as the round-1 notebook). It records Ch4 = PMT A
+  dynode 8 (4.7 nF pickoff) at each LED point, **first at 50 Ω, then at 1 MΩ**.
+  - The 1 MΩ recordings stop at `CH4_1M_STOP_V` = 3 V and are skipped at every brighter point. Each new step is
+    predicted from the previous one before switching.
+  - Cells: `replay_test` (MAX against NORM replay), `ratio` / `ratio_analyze` (joint occupancy scan for k),
+    timing, the scan (finer LED steps), and the analysis.
+  - Long-pulse window: −5 … +15 µs.
+- **`ad3pulse/sat_analysis.py`:**
+  - per-recording summaries: anode and dynode charge, peak, FWHM, rise and late/early; the 1 MΩ step; B photon
+    counts;
+  - the joint occupancy k (`ratio_k`);
+  - the smooth light scale (`light_scale`, `b_measure`, `fit_k_prefix`);
+  - per-metric linearity.
+- **`ad3pulse/sat_plots.py`:**
+  - the ratio-scan plot;
+  - response against LED voltage (pulse area and height);
+  - A against B with the light curve;
+  - linearity of all metrics;
+  - Ch1/Ch4 shape overlays and the Ch4/Ch1 ratio, plus the 1 MΩ step against ∫anode;
+  - shape metrics.
+- **`ad3pulse/saturation.py`:** `step_height`, `count_pulses`, `smooth_log_fit` (refit with model weights to
+  avoid a low-signal bias), `align_shift` and `rise_time`.
+- **`ad3pulse/acquire.py`:**
+  - per-channel polarity, with the offset flipped for positive pulses;
+  - per-channel impedance with its own V/div ladder; `ScopeSession.set_impedance()` remembers each impedance's
+    scale;
+  - per-channel peak limits, with `PeakLimitExceeded.channel`;
+  - `autorange(channels=...)` and `replay_mode`.
+- **`RigolScope.record_frames(mode=...)`:** NORM (default) or MAX.
+- **Tests:** 49 in total, including `tests/test_sat_analysis.py` and `tests/test_r2_take_point.py`. The latter
+  runs the notebook's `take_point` 1 MΩ stop logic against the fake scope.
+- `results/occupancy_2026-10-08/`: both PMTs' occupancy curves from the SPE scans. A's charge above 1.84 V was
+  clipped in that scan, so it gives no k.
+
+**Changed**
+- `crossing()` needs the final run below the level to have at least 2 points.
+
 ## 2026-10-07 (evening): new PMT B, full saturation run
 
 **Added**
