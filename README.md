@@ -17,7 +17,7 @@ The first single-photoelectron calibration of both PMTs is in [`results/spe_2026
 | --- | --- |
 | LED drive | AD3 `W1` → tee → 330 Ω + LED (turn-on ~1.6 V), and → Rigol **Ch3** (1 MΩ, trigger) |
 | PMT A | ISEG HV **ch0** (−1550 V) → Rigol **Ch1** (50 Ω) |
-| PMT B | ISEG HV **ch1** (−875 V) → Rigol **Ch2** (50 Ω) |
+| PMT B | ISEG HV **ch1** (−1550 V; replaced 2026-10-07, same type as A) → Rigol **Ch2** (50 Ω) |
 | Rigol MHO954 | Ethernet `192.168.0.101`, SCPI socket port 5555 |
 | ISEG SHR 40 60 | Ethernet `192.168.0.100`, TCP port 10001 |
 | AD3 | USB |
@@ -45,7 +45,7 @@ magnitudes; the sign comes from the channel polarity.
 
 ```powershell
 python -m ad3pulse hv set 1550 --channel 0 --current 50e-6   # set, switch on, wait until stable
-python -m ad3pulse hv set 875  --channel 1 --current 50e-6
+python -m ad3pulse hv set 1550 --channel 1 --current 50e-6
 python -m ad3pulse hv status --channel 0
 python -m ad3pulse hv off --channel 0
 ```

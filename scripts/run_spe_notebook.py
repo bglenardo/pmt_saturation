@@ -31,7 +31,7 @@ import sys
 import traceback
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")  # fit results print σ/μ; the Windows console default can't
+sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # σ/μ in output; live logs
 sys.stderr.reconfigure(encoding="utf-8")
 PROJECT = Path(__file__).resolve().parents[1]
 os.chdir(PROJECT)

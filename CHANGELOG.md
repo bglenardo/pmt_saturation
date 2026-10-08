@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-10-07 (evening): new PMT B, full saturation run
+
+**Added**
+- **`results/saturation_2026-10-07_newB/`:** SPE calibration of A and the new B, and the saturation of A against B
+  for 100 ns and 10 µs pulses.
+  - 100 ns: 5 % low at ~24.5 mA peak; the peak saturates at ~38 mA.
+  - 10 µs: linear to ≥ 32 nC per pulse, collapsing after ~55 nC.
+- **`scripts/run_saturation_chain.sh`:** unattended calibration → short scan → long scan → HV off (EXIT trap).
+- **`ad3pulse.saturation`:**
+  - `burst_frames()` rejects pickup bursts and non-LED triggers;
+  - `light_scale()` combines the light scale (A at low light, k·B above);
+  - `linearity(fit_mask=...)` takes an explicit set of fit points.
+- **`saturation.ipynb`:**
+  - burst rejection, and subtraction of a same-width control window;
+  - low-light points are included in the fit;
+  - per-regime pre/control windows;
+  - the k fit runs over the lowest-B points up to the first failed linearity cut;
+  - the timing cell carries on if the peak guard trips.
+
+**Changed**
+- PMT B was replaced by a tube of the same type as A, at −1550 V. Both notebooks were updated (`HV_EXPECTED_V`,
+  labels, B scan range).
+- `crossing()` returns the point where the deviation stays below the level, ignoring single noisy dips.
+- The short-regime B-FWHM check is informational only: the LED's pulse shape changes with drive.
+- `run_spe_notebook.py` writes line-buffered stdout, so logs update live.
+
+**Found**
+- NORM-mode replay returns only ~1000 screen points, so the long record is sampled at 50 ns.
+- A VS Code Jupyter kernel can hold the AD3 lock, even across a USB replug.
+
 ## 2026-10-07 (later): saturation studies, code, notebook and first hardware look
 
 **Added**

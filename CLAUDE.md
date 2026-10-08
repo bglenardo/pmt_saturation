@@ -27,14 +27,17 @@ The first milestone, **single-photoelectron (SPE) calibration of both PMTs, is d
   - one side → 330 Ω in series with the LED (turn-on ~1.6 V);
   - other side → **Rigol Ch3** (1 MΩ). This is the trigger.
 - **PMT A** (higher voltage): ISEG **ch0**, negative polarity → **Rigol Ch1**, scope 50 Ω input.
-- **PMT B** (lower voltage): ISEG **ch1**, negative polarity → **Rigol Ch2**, scope 50 Ω input.
-  **Being replaced (2026-10-07):** the original B was too noisy (base design suspected). The ch1 operating
-  point and B's SPE values below refer to the *old* PMT B.
+- **Ch4 (added 2026-10-08):** dynode-8 pickoff through 4.7 nF (assumed on PMT A; confirm). Its signal is
+  positive. Run it at 50 Ω and at 1 MΩ, and stop 1 MΩ once it reaches ~3–4 V.
+- **PMT B:** ISEG **ch1**, negative polarity → **Rigol Ch2**, scope 50 Ω input. **Replaced on 2026-10-07**
+  by a tube of the same type as A (the original B was too noisy; base design suspected). B's SPE values in
+  `results/spe_2026-10-07/` and the 875 V figures below refer to the *old* B.
 - ISEG ch2/ch3 are positive polarity and unused.
 
 **Operating points** (chosen by the user, 2026-10-06):
 - ch0 = −1550 V, draws ~16.9 µA;
-- ch1 = −875 V, draws ~14.0 µA (old PMT B);
+- ch1 = −1550 V for the new B (same type as A), draws ~16.8 µA. The user set it on the ISEG front panel.
+  The old B ran at −875 V and drew ~14.0 µA.
 - current limit **50 µA** on both. 20 µA was too tight: ch0 sat at 85 % of it.
 
 The measured currents imply dividers of ~95 MΩ and ~65 MΩ. The user's first estimate was 200 MΩ; that was
@@ -89,6 +92,8 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
 - `overlay_waveforms.ipynb`: overlays from the legacy AD3 sweep.
 - `saturation.ipynb`: **saturation studies** (`REGIME = "short"` or `"long"`). Tags: `parameters`, `helpers`,
   `connect`, `timing`, `reach`, `scan`, `load_saved`, `analyze`, `close`, `emergency`.
+- `scripts/run_saturation_chain.sh`: unattended chain. SPE calibration → short and long saturation scans → HV off,
+  with the HV-off step in an EXIT trap. Its processes survive stopping the Claude background task.
 - `scripts/run_spe_notebook.py`: runs notebook cells headless by tag (`scan`, `cal`, `final`, `refit`, `off`;
   `--notebook X.ipynb cells TAG,TAG [overrides] [--hv-off]` for any notebook).
 - `results/<name>/`: committed summaries and plots (`spe_2026-10-07/` has the first calibration;
@@ -101,7 +106,7 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
 **Bias the PMTs up** (confirm they're dark first):
 ```powershell
 python -m ad3pulse hv set 1550 --channel 0 --current 50e-6 --no-wait
-python -m ad3pulse hv set 875 --channel 1 --current 50e-6     # waits until stable
+python -m ad3pulse hv set 1550 --channel 1 --current 50e-6    # waits until stable
 python -m ad3pulse hv set 1550 --channel 0 --current 50e-6     # confirms ch0 is stable
 python -m ad3pulse hv status --channel 0
 ```
@@ -167,6 +172,9 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
 - **Frame recorder** (`:RECord:WRECord:*`, guide §3.19):
   - Holds 126,976 frames at 1k memory depth; recording 5000 triggers at 1 kHz takes ~5 s.
   - **Replay readout must use `:WAV:MODE NORM`.** `RAW` returns the same data for every frame.
+    **NORM returns only the ~1000 screen points**, whatever the memory depth. At 1k depth (short regime) nothing
+    is lost. The long-regime record (10k depth, 50 µs) comes back at 50 ns spacing (20 MS/s): A's 10 µs
+    envelope is fine, but B's few-ns SPE pulses are mostly lost, so B can't be photon-counted (2026-10-07).
   - **After `:RECord:WREPlay:FCURrent i`, send `*OPC?` before reading.** Without it, ~1 in 6 reads returned
     the previous frame.
   - Readout is ~90 ms/frame for 2 channels on small recordings and ~137 ms/frame for 1 channel on 5000-frame
@@ -215,6 +223,11 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
 - **Edge resolution** is period / samples; `fit_to_awg()` caps the rate at 125 MS/s, giving 8 ns steps.
 - **Device lock:** only one process (or one handle) can open the AD3. "Devices are busy" means the GUI or
   another Python process has it.
+  - **A VS Code Jupyter kernel on the `.venv` can hold it** (2026-10-07). Unplugging the USB did not help, and
+    `python -m ad3pulse list` showed "(in use)". Killing the kernel (`ipykernel_launcher`, the
+    `pythoncore-3.14` child process) freed it. Check `Get-CimInstance Win32_Process` for python processes first.
+  - **Stopping a background run kills the shell, not necessarily the AD3 output.** Afterwards, open the AD3 and
+    call `stop_output(0)` to make sure the LED is off.
 - **Legacy AD3 capture:** `FDwfAnalogInTriggerPositionSet` is a mid-buffer offset. Let the AWG go idle
   before re-arming.
 
@@ -230,9 +243,13 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   - **long:** 10 µs pulses probe depletion of the base capacitors (current droops during the pulse).
 - **Pulse rate < 5 Hz in both** (default 2 Hz; the notebook asserts it) so the bases recharge between pulses.
   Exception: the `lowlight` cell (A/B slope statistics, A far from saturation) runs at 10 Hz (user's call).
-- **Reference:** PMT B is the linear reference and A the device under test. A/B slope k is fitted on the lowest
-  points with B ≥ `REF_MIN_NPE`; deviation = A / (k·B) − 1. The A:B light ratio is not yet measured (the
-  `reach` cell gives it); if B is too dim to reach `REF_MIN_NPE` before A bends, the method needs rethinking.
+- **Reference:** PMT B is the linear reference and A the device under test.
+  - **Light scale (user's choice):** where B ≥ `REF_MIN_NPE` (0.05 PE) and > 3σ, k·B is the true light; at lower
+    light A is assumed linear.
+  - **k fit:** k is fitted on the `FIT_POINTS` lowest-B significant points, stopping at the first one that fails a
+    linearity cut. For long pulses that cut is A late/early ≥ 0.5: a depleted A gives *less* charge, so charge
+    cuts can't exclude it.
+  - **Deviation** = A / light − 1. The light ratio is A:B ≈ 1800 (short) and ≈ 680 (long) with the new B.
 - **PMT B has fewer base capacitors** than A and may deplete first, especially with 10 µs pulses. Watch the
   B self-check: B late/early ratio (long; > 2 % and > 3σ from low light) or mean-pulse FWHM (short; > 5 %).
   In A(t)/B(t), *falling* late in the pulse = A depleting; *rising* = B depleting. If B is flagged, stop and
@@ -242,43 +259,38 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   136 mV/div and ±4 V above. PMT traces are offset up 3 div so negative pulses get 7 of 8 divisions.
 - **Auto-range:** a positive `:CHAN:OFFS` moves the trace up (screen = −offset ± 4 div). This was verified on
   hardware: A's −1.96 V pulses at 0.5 V/div were not clipped.
-- **Long-regime record:** 5 µs/div, offset +10 µs, 10k points (200 MS/s), ≈ −15…+35 µs. Readout time per frame
-  is not yet measured.
+- **Long-regime record:** 5 µs/div, offset +10 µs, −15…+35 µs. It reads back as 1000 points at 50 ns (see the
+  Rigol notes) and takes ~1.5 min per 150-pulse point at 4 Hz.
 - **Timing (short regime):** a 1000-pulse point at 10 Hz takes ~390 s (3 channels, ~0.29 s/frame readout).
   The reach scan (16 points × 30 pulses at 2 Hz) took ~10 min.
 
 ## Status and next steps
-**Where things stand (end of 2026-10-07):** the HV is **off** on both channels, and PMT B is being swapped by the user.
-Details are in `results/saturation_short_2026-10-07/README.md`.
+**Where things stand (end of 2026-10-07, ~21:00):** the HV is **off** on both channels. The full saturation
+characterisation of PMT A is done in both regimes, against the new PMT B; see
+**`results/saturation_2026-10-07_newB/README.md`**. Earlier, noisy-B results are in `results/saturation_short_2026-10-07/`.
 
 - **Done:**
   - Ethernet control of the Rigol and ISEG;
-  - the AD3 pulse train and the frame recorder (now with re-armed normal triggering);
-  - SPE calibration of both PMTs at 5k pulses (`results/spe_2026-10-07/`);
-  - the saturation code and notebook. In the short regime, `timing`, `reach` and `lowlight` have run on hardware;
-    `scan` and `analyze` have only been tested offline on synthetic data.
-- **First saturation result:** **PMT A's peak anode current flat-tops at ~38–39 mA** at −1550 V (verified as
-  not scope clipping). Its charge grows only through a longer flat top.
-- **Blocker:** PMT B is too noisy to serve as the reference:
-  - ~2 mV rms pickup, against a ~5 mV SPE;
-  - ~100 MHz bursts every ~20–30 s on both channels;
-  - A gets ~250–400× more light than B, so B has < 3 PE while A is linear.
-
-  **The user is replacing PMT B** (base design suspected).
-- **After the swap:**
-  1. Bias the new B (operating point and current limit are the user's call; confirm the box is dark).
-  2. Noise check, i.e. baseline rms on Ch2 and whether the bursts persist. They also hit A, so they may be
-     external.
-  3. SPE calibration of the new B (`spe_calibration.ipynb`), then update `Q1_PC[2]`, `PMTS` and `HV_EXPECTED_V`
-     in `saturation.ipynb`, plus the operating points in this file.
-  4. Add burst-frame rejection to the saturation analysis: pre-trigger excursions, or a Ch3 height far from the
-     drive.
-  5. Re-run `timing` → `reach` → `lowlight` → `scan` → `analyze` (short), then the long (10 µs) regime.
-- **Still untested on hardware:**
-  - the 10 µs pulse regime: AD3 train, long record and its readout speed;
-  - the peak guard actually tripping;
-  - `TRIGGER_MODE = "ad3"` in `pmt_bias_test.ipynb`.
-- **Not yet decided by the user** (SPE): a 20k-pulse calibration; re-fitting B with a narrower window. Both are
-  moot if B is replaced.
-- **Uncommitted, user's files:** `.vscode/` and `Untitled-7.ipynb` (a scratch copy of the overlay notebook) are
-  left untracked on purpose.
+  - the AD3 pulse train and the frame recorder (with re-armed triggering);
+  - SPE calibration of A and of the new B. A: Q1 = 0.904 pC (`results/spe_2026-10-07/` has the morning
+    0.949 pC). New B: Q1 = 1.09 pC, gain 6.8e6;
+  - saturation, short and long, run unattended with `scripts/run_saturation_chain.sh`.
+- **Results (PMT A at −1550 V):**
+  - **100 ns pulses:** 5 % low at ~1,180 PE (≈ 24.5 mA peak), 10 % low at ~1,510 PE (≈ 27 mA). Peak current
+    saturates at ~38 mA.
+  - **10 µs pulses:** linear to at least ~36,000 PE (≈ 32 nC per pulse). By ~150,000 PE it is 60 % low, and the
+    current collapses after the base has delivered ~55 nC.
+  - The new B is clean up to ~9 nC per pulse in 10 µs.
+- **Approved plan for the next round: `NEXT_STEPS.md`.** It covers k from a joint occupancy scan, finer knee
+  scans, better long-pulse sampling, and the **Ch4 dynode-8 pickoff** (4.7 nF, at 50 Ω and 1 MΩ, with 1 MΩ
+  stopped at ~3 V). Ch4 was added by the user on 2026-10-08.
+- **Open questions and next steps** (see that README):
+  - finer amplitude steps around the knees: 1.81–1.90 V (long) and 2.0–2.2 V (short);
+  - more statistics on the A/B slope k;
+  - why k differs between regimes (1779 short vs 677 long). Candidates are B's long-window afterpulses, and
+    B's long-window noise, which comes from the 50 ns sampling;
+  - a better long-pulse readout. NORM replay gives only 1000 screen points;
+  - optionally, characterise B with the roles swapped.
+- **Still untested on hardware:** the peak guard actually tripping; `TRIGGER_MODE = "ad3"` in
+  `pmt_bias_test.ipynb`.
+- **Uncommitted, user's files:** `.vscode/` and `Untitled-7.ipynb` are left untracked on purpose.

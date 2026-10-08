@@ -101,19 +101,24 @@ class Linearity:
     fit_mask: np.ndarray  # points used for k
 
 
-def linearity(ref, test, fit_range: tuple[float, float], ref_err=None, test_err=None) -> Linearity:
-    """Fit test = k * ref (through the origin) for *ref* inside *fit_range*; return deviations.
+def linearity(ref, test, fit_range: tuple[float, float] | None = None, ref_err=None, test_err=None,
+              fit_mask=None) -> Linearity:
+    """Fit test = k * ref (through the origin) on the fit points; return deviations.
 
-    Use per-point means (charges in pC, or N_pe). The fit range should be
-    low light where both PMTs are linear but well above the pedestal.
+    The fit points are those with *ref* inside *fit_range*, or the boolean
+    *fit_mask* if given (e.g. "B above threshold and A still far from
+    saturation"). Use per-point means (charges in pC, or N_pe).
     """
     ref = np.asarray(ref, dtype=float)
     test = np.asarray(test, dtype=float)
     ref_err = np.zeros_like(ref) if ref_err is None else np.asarray(ref_err, dtype=float)
     test_err = np.zeros_like(test) if test_err is None else np.asarray(test_err, dtype=float)
-    mask = (ref >= fit_range[0]) & (ref <= fit_range[1])
+    if fit_mask is not None:
+        mask = np.asarray(fit_mask, dtype=bool)
+    else:
+        mask = (ref >= fit_range[0]) & (ref <= fit_range[1])
     if mask.sum() < 2:
-        raise ValueError(f"need at least 2 points with ref in {fit_range}, have {mask.sum()}")
+        raise ValueError(f"need at least 2 fit points, have {mask.sum()}")
     ratio = test[mask] / ref[mask]
     rel = np.hypot(test_err[mask] / test[mask], ref_err[mask] / ref[mask])
     if np.all(rel > 0):
@@ -132,21 +137,36 @@ def linearity(ref, test, fit_range: tuple[float, float], ref_err=None, test_err=
     return Linearity(k, k_err, dev, dev_err, mask)
 
 
-def crossing(x, deviation, level: float) -> float | None:
-    """First x (in increasing x) where the deviation falls to -*level*, interpolated.
+def light_scale(test, ref, k: float, use_ref) -> np.ndarray:
+    """True light per point in test-PMT PE: k * ref where *use_ref*, else the test PMT itself.
 
-    Returns None if it never does. *level* is positive, e.g. 0.05 for 5 %.
+    Below the reference's useful range the test PMT is assumed linear (its
+    deviation is then zero by construction); above it, the reference scaled
+    by the fitted slope k measures the light.
+    """
+    test = np.asarray(test, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    return np.where(np.asarray(use_ref, dtype=bool), k * ref, test)
+
+
+def crossing(x, deviation, level: float) -> float | None:
+    """x where the deviation falls to -*level* for good, interpolated (*level* > 0, e.g. 0.05).
+
+    Points are taken in increasing x; the crossing is the last downward pass
+    through -*level* after which every point stays below it, so a single
+    noisy dip does not count. Returns None if the curve does not end below.
     """
     x = np.asarray(x, dtype=float)
     d = np.asarray(deviation, dtype=float)
     order = np.argsort(x)
     x, d = x[order], d[order]
-    for i in range(1, len(x)):
-        if d[i] <= -level < d[i - 1]:
-            return float(x[i - 1] + (-level - d[i - 1]) / (d[i] - d[i - 1]) * (x[i] - x[i - 1]))
-    if len(d) and d[0] <= -level:
+    if not len(d) or d[-1] > -level:
+        return None
+    above = np.flatnonzero(d > -level)
+    if not len(above):
         return float(x[0])
-    return None
+    i = above[-1] + 1  # first point of the final run below -level
+    return float(x[i - 1] + (-level - d[i - 1]) / (d[i] - d[i - 1]) * (x[i] - x[i - 1]))
 
 
 def shape_ratio(test_bins, ref_bins) -> np.ndarray:
@@ -201,7 +221,34 @@ def flag_reference(ratios, errors=None, reference=None, tolerance: float = 0.02,
     return flag
 
 
+def burst_frames(v_pre: dict, pulser_height=None, min_pp_v: float = 0.02, n_sigma: float = 10.0,
+                 pulser_tolerance: float = 0.10) -> np.ndarray:
+    """True for frames hit by a pickup burst; use ``~burst_frames(...)`` to keep the good ones.
+
+    *v_pre* maps channel -> samples (frames, n) from a window before any light
+    arrives. A frame is a burst if any channel's peak-to-peak there exceeds
+    max(*min_pp_v*, *n_sigma* x the robust spread of all frames' peak-to-peak).
+    Single dark pulses (a few mV) stay below *min_pp_v*. With *pulser_height*
+    (LED drive per frame), frames whose drive is off by more than
+    *pulser_tolerance* from the median are also flagged: some bursts triggered
+    the scope themselves.
+    """
+    bad = None
+    for v in v_pre.values():
+        pp = np.ptp(np.asarray(v, dtype=float), axis=-1)
+        med = np.median(pp)
+        spread = 1.4826 * np.median(np.abs(pp - med))
+        flag = pp > max(min_pp_v, med + n_sigma * spread)
+        bad = flag if bad is None else bad | flag
+    if pulser_height is not None:
+        h = np.asarray(pulser_height, dtype=float)
+        ref = np.median(h)
+        flag = np.abs(h - ref) > pulser_tolerance * abs(ref)
+        bad = flag if bad is None else bad | flag
+    return bad
+
+
 __all__ = [
     "npe", "peak_current", "binned_charge", "fwhm", "PointSummary", "summarize_point",
-    "Linearity", "linearity", "crossing", "shape_ratio", "late_early", "flag_reference",
+    "Linearity", "linearity", "light_scale", "crossing", "shape_ratio", "late_early", "flag_reference", "burst_frames",
 ]

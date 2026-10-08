@@ -6,7 +6,7 @@ import pytest
 from ad3pulse.acquire import (PeakLimitExceeded, ScopeSession, ScopeSettings, autorange,
                               choose_scale, screen_range)
 from ad3pulse.hardware import FrameSet, Preamble
-from ad3pulse.saturation import (binned_charge, crossing, flag_reference, fwhm, late_early,
+from ad3pulse.saturation import (binned_charge, burst_frames, crossing, light_scale, flag_reference, fwhm, late_early,
                                  linearity, npe, peak_current, shape_ratio)
 
 
@@ -23,6 +23,8 @@ def test_linearity_recovers_saturation_point() -> None:
     n5 = crossing(n, lin.deviation, 0.05)
     assert n5 == pytest.approx(n_sat / 19, rel=0.03)
     assert crossing(n, lin.deviation, 0.99) is None
+    # an isolated noisy dip before the real bend is ignored
+    assert crossing([1, 2, 3, 4, 5], [0, -0.08, 0, -0.04, -0.2], 0.05) == pytest.approx(4 + 1 / 16)
 
 
 def test_linearity_weights_with_errors() -> None:
@@ -171,3 +173,30 @@ def test_autorange_peak_guard(tmp_path) -> None:
     s, _ = _session(tmp_path, {1: 2.0, 2: 0.01})  # Ch1 -4 V at 2 V LED
     with pytest.raises(PeakLimitExceeded):
         autorange(s, 2.0, (-500e-9, -300e-9), max_peak_v=2.0)
+
+
+def test_burst_frames_flags_pickup_and_bad_triggers() -> None:
+    rng = np.random.default_rng(4)
+    pre = {1: 0.001 * rng.standard_normal((200, 400)), 2: 0.002 * rng.standard_normal((200, 400))}
+    pre[1][10, 50:55] -= 0.005           # a dark pulse: kept
+    pre[2][20, 100:300] += 0.03 * np.sin(np.arange(200))  # burst on B only
+    pre[1][30, :] += 0.2 * np.sin(np.arange(400) / 3)     # burst on A
+    height = np.full(200, 1.9)
+    height[40] = 0.6                      # a frame triggered by something other than the LED
+    bad = burst_frames(pre, height)
+    assert np.flatnonzero(bad).tolist() == [20, 30, 40]
+    assert np.flatnonzero(burst_frames(pre)).tolist() == [20, 30]
+
+
+def test_linearity_fit_mask_and_light_scale() -> None:
+    n = np.array([1.0, 5, 20, 50, 200, 1000, 3000])        # true light, A PE
+    a = n / (1 + n / 2000)                                  # A saturates
+    b = n / 300                                             # B linear, 300x less light
+    use_b = b >= 0.05
+    fit = use_b & (a < 100)                                 # B usable and A still linear
+    lin = linearity(b, a, ref_err=0.05 * b, test_err=0.01 * a, fit_mask=fit)
+    assert lin.k == pytest.approx(300, rel=0.03)
+    light = light_scale(a, b, lin.k, use_b)
+    assert light[0] == a[0] and light[-1] == pytest.approx(3000, rel=0.03)
+    dev = a / light - 1
+    assert dev[-1] == pytest.approx(-0.6, abs=0.03)
