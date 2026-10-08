@@ -427,7 +427,8 @@ class RigolScope(_ResourceBase):
         self._write(f":CHAN{channel}:IMP {impedance}")
         self._write(f":CHAN{channel}:COUP {coupling}")
         self._write(f":CHAN{channel}:SCAL {scale_v_div:g}")
-        self._write(f":CHAN{channel}:OFFS {offset_v:g}")
+        # "-0" is not accepted as an offset (the old offset stayed, rescaled with the V/div)
+        self._write(f":CHAN{channel}:OFFS {offset_v + 0.0:g}")
 
     def configure_timebase(self, scale_s_div: float, offset_s: float = 0.0,
                            memory_depth: str | None = None) -> None:
@@ -615,7 +616,9 @@ class RigolScope(_ResourceBase):
                 progress(i + 1, n_frames)
         self._write(":RECord:WRECord:ENABle OFF")
         meta = {"idn": self.idn, "n_frames": n_frames, "replay_mode": mode,
-                "sample_rate_Hz": 1.0 / pres[channels[0]].xincrement}
+                "sample_rate_Hz": 1.0 / pres[channels[0]].xincrement,
+                "acq_memory_depth": self._query(":ACQ:MDEP?").strip(),
+                "acq_sample_rate": self._query(":ACQ:SRAT?").strip()}
         return FrameSet(time_s=pres[channels[0]].times(points), codes=codes,
                         preambles=pres, meta=meta)
 

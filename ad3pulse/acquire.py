@@ -49,7 +49,11 @@ class ScopeSettings:
     # of the 8 divisions: up for negative (anode) pulses, down for positive
     # (dynode pickoff) ones. offset_v = -polarity * offset_div * scale.
     pmt_offset_div: float = 3.0
+    # No offset at 1 MOhm: at 2 V/div the scope reported a -6 V offset as applied but did not shift
+    # the trace, so the preamble turned the 0 V baseline into a fake +6 V (2026-10-08).
+    pmt_offset_div_1m: float = 0.0
     polarity: dict[int, int] = field(default_factory=dict)  # channel -> -1 (default) or +1
+    offset_actual: dict[int, float] = field(default_factory=dict)  # read-back offset if it differs
     impedance: dict[int, str] = field(default_factory=dict)  # channel -> "FIFTy" (default) or "OMEG"
     timebase_s_div: float = 100e-9
     time_offset_s: float = 0.0
@@ -66,8 +70,34 @@ class ScopeSettings:
     def imp(self, ch: int) -> str:
         return self.impedance.get(ch, "FIFTy")
 
+    def offset_div(self, ch: int) -> float:
+        return self.pmt_offset_div_1m if self.imp(ch) == "OMEG" else self.pmt_offset_div
+
     def offset_v(self, ch: int) -> float:
-        return -self.pol(ch) * self.pmt_offset_div * self.pmt_scale_v_div[ch]
+        if ch in self.offset_actual:
+            return self.offset_actual[ch]
+        return -self.pol(ch) * self.offset_div(ch) * self.pmt_scale_v_div[ch] + 0.0
+
+
+def parse_depth(text) -> float:
+    """'10k' / '1.0000E+04' / 10000 -> 10000.0 (points)."""
+    t = str(text).strip().lower()
+    mult = {"k": 1e3, "m": 1e6}.get(t[-1:], 1.0)
+    return float(t[:-1] if t[-1:] in "km" and t[-1:] else t) * mult
+
+
+def check_memory_depth(scope, requested, retries: int = 5) -> float:
+    """Read back the memory depth; retry briefly, then raise if it is not what was requested."""
+    want = parse_depth(requested)
+    got = float("nan")
+    for _ in range(retries):
+        got = parse_depth(scope._query(":ACQ:MDEP?"))
+        if abs(got - want) < 0.5:
+            return got
+        time.sleep(0.3)
+        scope._write(f":ACQ:MDEP {requested}")
+    raise RuntimeError(f"memory depth {requested!r} not accepted (scope reports {got:g}); "
+                       "use a listed value such as 1k, 10k, 100k")
 
 
 def screen_range(scale_v_div: float, offset_v: float) -> tuple[float, float]:
@@ -128,7 +158,11 @@ class ScopeSession:
             self._apply_scale(ch, scale)
         self.scope.configure_channel(s.pulser_channel, s.pulser_scale_v_div, s.pulser_offset_v,
                                      impedance="OMEG")
+        # The memory depth is only accepted while the scope runs (set while stopped, it was
+        # silently ignored), and only listed values are valid ("20k" is not): verify it.
+        self.scope._write(":RUN")
         self.scope.configure_timebase(s.timebase_s_div, s.time_offset_s, s.memory_depth)
+        check_memory_depth(self.scope, s.memory_depth)
         self.scope.configure_edge_trigger(s.pulser_channel, s.trig_level_v, "POS")
         self.scope.set_trigger_sweep("NORM")
         self.scope._write(":RUN")
@@ -140,9 +174,31 @@ class ScopeSession:
             self.scope = None
 
     def _apply_scale(self, ch: int, scale: float) -> None:
+        """Set V/div and offset, then read both back; resend once if the scope didn't take them.
+
+        The scope sometimes keeps a different scale or offset (it rescales the offset with the
+        V/div, and ignored "-0"); clip detection needs the values actually in use, so those are
+        stored (``settings.pmt_scale_v_div`` and ``settings.offset_actual``).
+        """
         s = self.settings
         s.pmt_scale_v_div[ch] = scale
-        self.scope.configure_channel(ch, scale, s.offset_v(ch), impedance=s.imp(ch))
+        s.offset_actual.pop(ch, None)
+        want_off = s.offset_v(ch)
+        self.scope.configure_channel(ch, scale, want_off, impedance=s.imp(ch))
+        for attempt in range(2):
+            got_scale, got_off = self.channel_setting(ch)
+            ok = (abs(got_scale - scale) <= 0.01 * scale
+                  and abs(got_off - want_off) <= 0.02 * scale + 1e-6)
+            if ok:
+                break
+            if attempt == 0:
+                self.scope._write(f":CHAN{ch}:SCAL {scale:g}")
+                self.scope._write(f":CHAN{ch}:OFFS {want_off + 0.0:g}")
+        if not ok:
+            print(f"    Ch{ch}: asked {scale:g} V/div, offset {want_off:+g} V; scope uses {got_scale:g} V/div, "
+                  f"offset {got_off:+g} V")
+            s.pmt_scale_v_div[ch] = got_scale
+            s.offset_actual[ch] = got_off
         self._scale_memory[(ch, s.imp(ch))] = scale
 
     def set_impedance(self, ch: int, impedance: str, scale: float | None = None) -> None:
@@ -280,7 +336,7 @@ def autorange(session: ScopeSession, amplitude: float, baseline_window: tuple[fl
         changed = False
         for ch, c in checks.items():
             lad = ladder if ladder is not None else LADDERS[s.imp(ch)]
-            new = choose_scale(c.peak_v, c.clipped, s.pmt_scale_v_div[ch], s.pmt_offset_div,
+            new = choose_scale(c.peak_v, c.clipped, s.pmt_scale_v_div[ch], s.offset_div(ch),
                                lad, fill)
             if new != s.pmt_scale_v_div[ch]:
                 session.set_scale(ch, new)
@@ -291,7 +347,7 @@ def autorange(session: ScopeSession, amplitude: float, baseline_window: tuple[fl
 
 
 __all__ = [
-    "SCOPE_DIVISIONS", "SCALE_LADDER_V_DIV", "SCALE_LADDER_1M_V_DIV", "LADDERS",
+    "parse_depth", "check_memory_depth", "SCOPE_DIVISIONS", "SCALE_LADDER_V_DIV", "SCALE_LADDER_1M_V_DIV", "LADDERS",
     "PeakLimitExceeded", "ScopeSettings",
     "screen_range", "choose_scale", "ScopeSession", "ChannelCheck", "check_peaks", "autorange",
 ]

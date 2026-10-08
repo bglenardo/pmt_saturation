@@ -127,10 +127,31 @@ class FakeScope:
     def configure_channel(self, ch, scale, offset=0.0, coupling="DC", impedance="OMEG"):
         self.scale[ch], self.offset[ch], self.impedance[ch] = scale, offset, impedance
 
-    def configure_timebase(self, *a, **k): pass
+    def configure_timebase(self, scale, offset=0.0, memory_depth=None):
+        if memory_depth is not None:
+            self.depth = memory_depth
     def configure_edge_trigger(self, *a, **k): pass
     def set_trigger_sweep(self, *a): pass
-    def _write(self, cmd): pass
+    depth = "1k"
+
+    def _write(self, cmd):
+        if cmd.startswith(":ACQ:MDEP"):
+            self.depth = cmd.split()[1]
+        elif cmd.startswith(":CHAN") and ":SCAL " in cmd:
+            self.scale[int(cmd[5])] = float(cmd.split()[1])
+        elif cmd.startswith(":CHAN") and ":OFFS " in cmd:
+            self.offset[int(cmd[5])] = float(cmd.split()[1])
+
+    def _query(self, cmd):
+        if cmd.startswith(":CHAN") and cmd.endswith(":SCAL?"):
+            return f"{self.scale[int(cmd[5])]:.6E}"
+        if cmd.startswith(":CHAN") and cmd.endswith(":OFFS?"):
+            return f"{self.offset[int(cmd[5])]:.6E}"
+        if cmd == ":ACQ:MDEP?":
+            from ad3pulse.acquire import parse_depth
+            d = parse_depth(self.depth)
+            return f"{d:.4E}" if self.depth in ("1k", "10k", "100k") else "1.0000E+03"   # invalid -> stays 1k
+        return "0"
     def close(self): pass
 
     def record_frames(self, n_frames, channels, timeout_s=60.0, mode="NORM"):
@@ -219,6 +240,7 @@ def test_positive_pulse_channel_autorange_and_impedance_switch(tmp_path) -> None
     assert scales[4] == 0.2 and scales[1] == 0.05       # Ch4 +0.8 V, Ch1 -0.2 V
     s.set_impedance(4, "OMEG")                           # first 1 MOhm use: coarsest 1 MOhm step
     assert scope.impedance[4] == "OMEG" and settings.pmt_scale_v_div[4] == 2.0
+    assert scope.offset[4] == 0.0                         # no offset at 1 MOhm (scope ignored it at 2 V/div)
     s.set_scale(4, 0.5)
     s.set_impedance(4, "FIFTy")                          # back to 50 Ohm: its last scale returns
     assert scope.impedance[4] == "FIFTy" and settings.pmt_scale_v_div[4] == 0.2
@@ -277,3 +299,36 @@ def test_align_shift_and_rise_time() -> None:
     assert align_shift(t, a, b) == pytest.approx(-20e-9)
     ramp = np.clip((t - 100e-9) / 100e-9, 0, 1)
     assert rise_time(t, -ramp) == pytest.approx(80e-9, abs=2e-9)
+
+
+def test_memory_depth_is_verified(tmp_path) -> None:
+    from ad3pulse.acquire import ScopeSettings as SS, parse_depth
+    assert parse_depth("10k") == 1e4 and parse_depth("1.0000E+04") == 1e4 and parse_depth(1000) == 1e3
+    ad3 = FakeAD3()
+    scope = FakeScope({1: 0.1}, ad3)
+    ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="10k"), ad3, rate_hz=2.0,
+                 out_dir=tmp_path, scope_factory=lambda r: scope).open()
+    with pytest.raises(RuntimeError, match="not accepted"):
+        ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="20k"), ad3, rate_hz=2.0,
+                     out_dir=tmp_path, scope_factory=lambda r: FakeScope({1: 0.1}, ad3)).open()
+
+
+def test_apply_scale_reads_back_and_uses_actual_values(tmp_path) -> None:
+    from ad3pulse.acquire import ScopeSettings as SS
+    ad3 = FakeAD3()
+    scope = FakeScope({1: 0.1}, ad3)
+    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}), ad3, rate_hz=2.0, out_dir=tmp_path,
+                     scope_factory=lambda r: scope).open()
+    assert s.settings.offset_actual == {}
+    real_cfg = scope.configure_channel
+
+    def sticky(ch, scale, offset=0.0, coupling="DC", impedance="OMEG"):   # scope ignores the new offset
+        old = scope.offset.get(ch, 0.0)
+        real_cfg(ch, scale, offset, coupling, impedance)
+        scope.offset[ch] = old
+
+    scope.configure_channel = sticky
+    scope._write = lambda cmd: None                                      # and ignores the resend
+    s.set_scale(1, 0.1)                                                  # wants +0.3 V, scope keeps +0.03 V
+    assert s.settings.offset_actual[1] == pytest.approx(0.03)            # actual offset recorded ...
+    assert s.settings.offset_v(1) == pytest.approx(0.03)                 # ... and used for the screen range

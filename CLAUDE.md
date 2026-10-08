@@ -27,7 +27,9 @@ The first milestone, **single-photoelectron (SPE) calibration of both PMTs, is d
   - one side → 330 Ω in series with the LED (turn-on ~1.6 V);
   - other side → **Rigol Ch3** (1 MΩ). This is the trigger.
 - **PMT A** (higher voltage): ISEG **ch0**, negative polarity → **Rigol Ch1**, scope 50 Ω input.
-- **Ch4 (added 2026-10-08):** PMT A's dynode-8 pickoff through 4.7 nF. Its signal is
+- **Ch4 (added 2026-10-08):** PMT A's dynode-8 pickoff through 4.7 nF.
+  - At 50 Ω it gives a positive pulse (19.5 pC at A ≈ 31 PE; 446 pC at A ≈ 700 PE, short pulses).
+  - At 1 MΩ it gives a positive charge *step*, ~30 mV at 19.5 pC (C_eff ≈ 0.65 nF), with ~16 MHz ringing. Its signal is
   positive. Run it at 50 Ω and at 1 MΩ, and stop 1 MΩ once it reaches ~3–4 V.
 - **PMT B:** ISEG **ch1**, negative polarity → **Rigol Ch2**, scope 50 Ω input. **Replaced on 2026-10-07**
   by a tube of the same type as A (the original B was too noisy; base design suspected). B's SPE values in
@@ -186,6 +188,19 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
     `:TRIG:SWE?` still reports `NORM`. At 2 Hz, 19 of 20 frames were untriggered noise and 20 frames recorded in
     0.9 s. `record_frames()` now sends `:TRIG:SWE NORM` + `:RUN` and waits for `WAIT`/`TD` before every
     recording. At 1 kHz real triggers beat the auto timeout: all 15,800 SPE scan frames had the Ch3 pulse.
+- **Memory depth** must be a listed value (`1k`, `10k`, `100k`, ...); **`20k` is silently ignored**. It is also
+  ignored if set while stopped. `ScopeSession.open()` now sends `:RUN` first and verifies `:ACQ:MDEP?`.
+  Round 1's long record was really sampled at 1k depth (20–50 MS/s). With 10k over 20 µs it's 500 MS/s.
+- **Replay at full depth is not possible.** In frame replay, `:WAV:MODE MAX`/`RAW` with `:WAV:POIN 10000` return
+  10k points, but the *same record for every frame*. That record is not the replayed frame: its correlation with
+  frame N is ~0. Only NORM (1000 screen points) is frame-correct (`scripts/rigol_replay_test.py`, 2026-10-08).
+  Peak-detect acquisition (`:ACQ:TYPE PEAK`) didn't make B photon-countable.
+- **Offsets:**
+  - `:CHANx:OFFS -0` is not accepted; the old offset stays, and the scope rescales it with the V/div.
+  - At 1 MΩ and 2 V/div, a −6 V offset was reported as applied but not applied, so the preamble showed a fake
+    +6 V.
+  - The code writes clean values, uses **zero offset at 1 MΩ**, and reads back scale and offset after every
+    change (`ScopeSession._apply_scale`). The scope also once kept 0.031 V/div when 0.01 was asked.
 - **Waveform data:** `WORD` byte order is little-endian (`WORD_BIG_ENDIAN = False`). Volts =
   (code − yorigin − yref) · yinc from `:WAV:PRE?`.
 - **Settings:**
