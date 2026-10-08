@@ -99,8 +99,14 @@ def summarize_frames(fs: FrameSet, cfg: dict, q1_pc: dict, reject_bursts: bool =
     return row
 
 
-def summarize_ratio(fs: FrameSet, cfg: dict, q1_pc: dict, n_sigma: float = 3.0) -> dict:
-    """Joint occupancy point: zero-PE mu and mean PE for both anodes (100 ns pulses)."""
+def summarize_ratio(fs: FrameSet, cfg: dict, q1_pc: dict, n_sigma: float = 3.0,
+                    threshold_q1: float | None = None) -> dict:
+    """Joint occupancy point: zero-PE mu and mean PE for both anodes (100 ns pulses).
+
+    *threshold_q1* sets the zero-PE threshold at that fraction of Q1 above the
+    pedestal median (instead of n_sigma robust sigmas); the mu error then uses
+    both windows.
+    """
     t = fs.time_s
     volts = {ch: fs.volts(ch) for ch in ANODES if ch in fs.codes}
     pre = window_mask(t, cfg["pre"])
@@ -110,8 +116,13 @@ def summarize_ratio(fs: FrameSet, cfg: dict, q1_pc: dict, n_sigma: float = 3.0) 
         v = baseline_subtract(v_all[keep], t, cfg["baseline"], False)
         s = integrate_charge(v, t, cfg["occ_signal"])
         c = integrate_charge(v, t, cfg["occ_control"])
-        o = occupancy(s, c, n_sigma=n_sigma)
-        mu_err = np.sqrt((1 - o.p0_signal) / (o.n * o.p0_signal)) if o.p0_signal > 0 else np.inf
+        thr = None if threshold_q1 is None else threshold_q1 * q1_pc[ch]
+        o = occupancy(s, c, n_sigma=n_sigma, threshold_pC=thr)
+        if o.p0_signal > 0 and o.p0_control > 0:
+            mu_err = np.sqrt((1 - o.p0_signal) / (o.n * o.p0_signal)
+                             + (1 - o.p0_control) / (len(c) * o.p0_control))
+        else:
+            mu_err = np.inf
         m, e = _mean_err(s - c.mean())
         out[ch] = {"mu": o.mu, "mu_err": float(mu_err), "pe": m / q1_pc[ch], "pe_err": e / q1_pc[ch],
                    "threshold_pC": o.threshold_pC}

@@ -238,6 +238,13 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   records `pulser_height_V`.
 - `FDwfAnalogOutNodeDataInfo` returns 0 until `FDwfAnalogOutNodeFunctionSet(…, FUNC_CUSTOM)` has been called.
 - **Edge resolution** is period / samples; `fit_to_awg()` caps the rate at 125 MS/s, giving 8 ns steps.
+- **Never open a second scope connection while a run is in progress.** On 2026-10-08 two pytest runs imported
+  `scripts/rigol_replay_test.py`, a hardware script whose name matched pytest's pattern, and a diagnostic
+  connection followed. This broke the chain's scope session: timeouts, then a stray `*IDN?` reply read as the
+  memory depth. The ratio scan was lost after 1.86 V and the chain fell through to HV off.
+  - The script is now `scripts/rigol_replay_check.py`, guarded by `__main__`.
+  - `pytest.ini` limits collection to `tests/`.
+  - The memory-depth read-back retries on a stray reply.
 - **Device lock:** only one process (or one handle) can open the AD3. "Devices are busy" means the GUI or
   another Python process has it.
   - **A VS Code Jupyter kernel on the `.venv` can hold it** (2026-10-07). Unplugging the USB did not help, and

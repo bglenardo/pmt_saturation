@@ -3,12 +3,16 @@
 # short-pulse scan -> long-pulse scan (each with Ch4 dynode 8 at 50 Ohm and 1 MOhm) -> HV off.
 # The HV-off step runs on exit, also if a stage fails. Run from the repo root with Git Bash:
 #
-#   bash scripts/run_r2_chain.sh <A amplitude V> <B amplitude V> > runs/saturation_r2/chain.log 2>&1
+#   bash scripts/run_r2_chain.sh <A amplitude V> <B amplitude V> [Q1_A Q1_B] > runs/saturation_r2/chain.log 2>&1
 #
+# With Q1_A Q1_B (pC) the SPE calibration is skipped and those values are used.
 # HV must already be on at the operating points (box dark).
+# Do not open other connections to the scope while this runs: they break the session.
 set -u
 A_AMP=$1
 B_AMP=$2
+Q1A_ARG=${3:-}
+Q1B_ARG=${4:-}
 PY=.venv/Scripts/python
 RUN="$PY scripts/run_spe_notebook.py"
 NB="--notebook saturation_r2.ipynb"
@@ -22,11 +26,17 @@ hv_off() {
 }
 trap hv_off EXIT
 
-echo "=== $(date) SPE calibration: A $A_AMP V, B $B_AMP V"
-$RUN cal "{1: $A_AMP, 2: $B_AMP}" "CAL_FRAMES = 5000" > $LOG/cal_$STAMP.log 2>&1
-grep RESULT $LOG/cal_$STAMP.log
-Q1A=$(grep -oP 'RESULT ch1: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)
-Q1B=$(grep -oP 'RESULT ch2: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)
+if [ -n "$Q1A_ARG" ] && [ -n "$Q1B_ARG" ]; then
+    echo "=== $(date) SPE calibration skipped; Q1 given"
+    Q1A=$Q1A_ARG
+    Q1B=$Q1B_ARG
+else
+    echo "=== $(date) SPE calibration: A $A_AMP V, B $B_AMP V"
+    $RUN cal "{1: $A_AMP, 2: $B_AMP}" "CAL_FRAMES = 5000" > $LOG/cal_$STAMP.log 2>&1
+    grep RESULT $LOG/cal_$STAMP.log
+    Q1A=$(grep -oP 'RESULT ch1: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)
+    Q1B=$(grep -oP 'RESULT ch2: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)
+fi
 if [ -z "$Q1A" ] || [ -z "$Q1B" ]; then
     echo "calibration did not give Q1 for both PMTs; stopping"
     exit 1

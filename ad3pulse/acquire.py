@@ -91,7 +91,11 @@ def check_memory_depth(scope, requested, retries: int = 5) -> float:
     want = parse_depth(requested)
     got = float("nan")
     for _ in range(retries):
-        got = parse_depth(scope._query(":ACQ:MDEP?"))
+        try:
+            got = parse_depth(scope._query(":ACQ:MDEP?"))
+        except ValueError:  # a stray reply (e.g. a late *IDN?) after a reconnect: ask again
+            time.sleep(0.3)
+            continue
         if abs(got - want) < 0.5:
             return got
         time.sleep(0.3)

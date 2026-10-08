@@ -67,7 +67,8 @@ class Occupancy:
     n: int
 
 
-def occupancy(q_signal: np.ndarray, q_control: np.ndarray, n_sigma: float = 3.0) -> Occupancy:
+def occupancy(q_signal: np.ndarray, q_control: np.ndarray, n_sigma: float = 3.0,
+              threshold_pC: float | None = None) -> Occupancy:
     """Mean PE per pulse from zero-PE counting: mu = -ln P0(signal) + ln P0(control).
 
     The threshold is the control-window pedestal median + n_sigma robust sigmas.
@@ -76,7 +77,10 @@ def occupancy(q_signal: np.ndarray, q_control: np.ndarray, n_sigma: float = 3.0)
     """
     q_signal = np.asarray(q_signal, dtype=float)
     q_control = np.asarray(q_control, dtype=float)
-    threshold = float(np.median(q_control) + n_sigma * robust_sigma(q_control))
+    if threshold_pC is None:
+        threshold = float(np.median(q_control) + n_sigma * robust_sigma(q_control))
+    else:  # e.g. a fraction of Q1, when the pedestal has non-Gaussian tails
+        threshold = float(np.median(q_control) + threshold_pC)
     p0_s = float(np.mean(q_signal < threshold))
     p0_c = float(np.mean(q_control < threshold))
     mu = np.inf if p0_s == 0 else -np.log(p0_s) + np.log(p0_c)
