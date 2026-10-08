@@ -42,7 +42,16 @@ The user asked to commit first.
   - the `CLAUDE.md`, `CHANGELOG.md` and `README.md` updates.
 - `.vscode/` and `Untitled-7.ipynb` stay untracked.
 
-### 1. Occupancy plot with both PMTs (analysis only, now)
+### 1. Occupancy plot with both PMTs (analysis only): DONE 2026-10-08
+`results/occupancy_2026-10-08/occupancy_both_pmts.png`. The SPE scan recorded **both channels at every point**, but
+**A's charge is clipped above 1.84 V**: the SPE notebook uses a fixed 10 mV/div (±40 mV), so A's charge there isn't
+valid and no k can be taken from that scan. **Step 3 must auto-range each channel.**
+- **B:** charge/Q1 matches zero-PE μ within a few % (0.30/0.29, 0.46/0.43, 0.95/0.94).
+- **A:** charge/Q1 is ~10 % above μ. This is likely SPEs lost below A's zero-PE threshold; step 3 checks it.
+- The two μ curves don't overlap in LED voltage and have different log-slopes, so k can't be read off by shifting
+  one onto the other.
+
+### 1 (original plan). Occupancy plot with both PMTs
 - Re-plot the saved SPE scans with both PMTs on one μ-against-LED-voltage plot:
   - A from `20261007_171831`;
   - B from `20261007_171831` (1.70–1.74 V) and `180248` (1.84–2.10 V).
