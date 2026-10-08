@@ -208,6 +208,11 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   - `:TFORce` forces a trigger.
   - `:TRIG:SWE NORM` ensures frames record only on real triggers, but must be re-sent before each
     recording (see the frame recorder notes above).
+- **Stuck socket, replies one command late (2026-10-08).** After a session was broken by a second connection,
+  the raw socket held back every reply until the *next* command arrived: `*IDN?` returned the previous answer.
+  Draining found nothing, and VXI-11 timed out as well. **Power-cycling the scope** is the fix.
+  `RigolScope.connect()` now drains stale replies and re-asks `*IDN?` if the first answer isn't Rigol's, but
+  that can't fix the stuck state.
 - **Network drops:** the scope occasionally drops off the LAN or resets a connection mid-readout. The
   notebook's `record()` reconnects and retries (`SCOPE_RETRIES`).
 

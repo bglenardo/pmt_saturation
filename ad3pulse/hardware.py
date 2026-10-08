@@ -402,8 +402,33 @@ class RigolScope(_ResourceBase):
             # Raw sockets have no message framing; SCPI replies end in a newline.
             self._instrument.read_termination = "\n"
             self._instrument.write_termination = "\n"
+            self.drain()
         self.idn = self._query("*IDN?").strip()
+        if "RIGOL" not in self.idn.upper():  # a stale reply got in first: drain and ask again
+            self.drain()
+            self.idn = self._query("*IDN?").strip()
         return self
+
+    def drain(self, timeout_ms: int = 300, max_reads: int = 20) -> list[str]:
+        """Discard replies left in the scope's output queue (e.g. by a broken session).
+
+        A new socket connection inherits them, so every query would otherwise get the
+        previous query's answer (seen on 2026-10-08).
+        """
+        import pyvisa
+
+        stale = []
+        old = self._instrument.timeout
+        self._instrument.timeout = timeout_ms
+        try:
+            for _ in range(max_reads):
+                try:
+                    stale.append(self._instrument.read())
+                except pyvisa.errors.VisaIOError:
+                    break
+        finally:
+            self._instrument.timeout = old
+        return stale
 
     SOCKET_PORT = 5555
 
