@@ -21,7 +21,7 @@ import numpy as np
 
 from .hardware import FrameSet
 from .saturation import (binned_charge, burst_frames, count_pulses, crossing, fwhm, late_early,
-                         peak_current, rise_time, smooth_log_fit, step_height)
+                         peak_current, rise_time, smooth_log_fit, smooth_log_spline, step_height)
 from .spe import baseline_subtract, integrate_charge, occupancy, window_mask
 
 ANODES = (1, 2)
@@ -251,6 +251,38 @@ def light_scale(points: list[ScanPoint], k: float, k_err: float, b_min: float = 
             "b": b, "b_err": be, "b_sig": sig, "v_on": v_on}
 
 
+def light_scale_matched(points: list[ScanPoint], b, b_err, a_window: tuple[float, float],
+                        b_min: float = 0.05, k_ref: float | None = None) -> dict:
+    """Light per point in A PE, continuous at the hand-over from A to B (user's prescription).
+
+    B is smoothed against LED voltage with a weighted spline. On the points whose A charge lies
+    in *a_window* (B well measured, A still linear) k_match = A / B_fit is fitted; below the
+    window's upper edge A itself is the light, above it k_match * B_fit. *k_ref* (e.g. from the
+    joint occupancy scan) is only reported for comparison.
+    """
+    amp = np.array([p.amp for p in points])
+    a = np.array([p.r50["ch"][1]["pe"] for p in points])
+    ae = np.array([p.r50["ch"][1]["pe_err"] for p in points])
+    b, be = np.asarray(b, float), np.asarray(b_err, float)
+    sig = (b >= b_min) & (b > 3 * be)
+    fit = smooth_log_spline(amp[sig], b[sig], be[sig])
+    bf, bfe = fit.value(amp), fit.error(amp)
+    win = (a >= a_window[0]) & (a <= a_window[1]) & sig
+    if win.sum() < 2:
+        raise ValueError(f"fewer than 2 points with A in {a_window} and a significant B")
+    r = a[win] / bf[win]
+    re = r * np.hypot(ae[win] / a[win], bfe[win] / bf[win])
+    w = 1 / re ** 2
+    k = float(np.sum(w * r) / np.sum(w))
+    k_err = float(np.sqrt(1 / np.sum(w) * max(1.0, np.sum(w * (r - k) ** 2) / max(win.sum() - 1, 1))))
+    use_b = a > a_window[1]
+    light = np.where(use_b, k * bf, a)
+    light_err = np.where(use_b, light * np.hypot(bfe / bf, k_err / k), ae)
+    return {"amp": amp, "light": light, "light_err": light_err, "use_b": use_b, "fit": fit, "b": b,
+            "b_err": be, "b_sig": sig, "v_on": float(amp[use_b].min()) if use_b.any() else float("nan"),
+            "k": k, "k_err": k_err, "k_ref": k_ref, "window": win}
+
+
 def metric_table(points: list[ScanPoint]) -> dict:
     """Per-point arrays (value, error) of every response metric that is present."""
     def arr(getter):
@@ -297,5 +329,6 @@ def metric_linearity(value, err, light, light_err, fit_mask, levels=(0.05, 0.10)
 
 __all__ = [
     "ANODES", "DYNODE", "PULSER", "summarize_frames", "summarize_ratio", "ratio_k", "ScanPoint",
-    "load_scan", "b_measure", "fit_k_prefix", "light_scale", "metric_table", "metric_linearity",
+    "load_scan", "b_measure", "fit_k_prefix", "light_scale", "light_scale_matched", "metric_table",
+    "metric_linearity",
 ]

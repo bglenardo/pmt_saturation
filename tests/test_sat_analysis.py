@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 from ad3pulse.hardware import FrameSet, Preamble
-from ad3pulse.sat_analysis import (light_scale, load_scan, metric_linearity, metric_table, ratio_k,
+from ad3pulse.sat_analysis import (b_measure, light_scale, light_scale_matched, load_scan, metric_linearity,
+                                   metric_table, ratio_k,
                                    summarize_frames, summarize_ratio)
 
 Q1 = {1: 0.9, 2: 1.1}
@@ -96,3 +97,24 @@ def test_ratio_scan_gives_k() -> None:
     res = ratio_k(rows, a_max_pe=SAT / 10)
     assert res["use"].sum() >= 3
     assert res["k_mean"] == pytest.approx(K, rel=0.12)
+
+
+def test_matched_light_scale_is_continuous_and_finds_the_knee(tmp_path) -> None:
+    rng = np.random.default_rng(6)
+    amps = np.round(np.linspace(1.8, 3.0, 25), 3)
+    lights = 20 * np.exp(6 * (amps - 1.8))
+    for amp, light in zip(amps, lights):
+        ch, imp = _point(light, rng, n=300)
+        _frameset(ch, {"amplitude_V": float(amp), "pmt_impedance": imp}).save(
+            tmp_path / f"short_up_{amp:.3f}V_20261008_000000.npz")
+    points, _ = load_scan(tmp_path, "short", CFG, Q1)
+    b, be, _ = b_measure(points)
+    ls = light_scale_matched(points, b, be, a_window=(100.0, 600.0), k_ref=K)
+    assert ls["k"] == pytest.approx(K, rel=0.1)
+    a = np.array([p.r50["ch"][1]["pe"] for p in points])
+    np.testing.assert_allclose(ls["light"][~ls["use_b"]], a[~ls["use_b"]])     # A below the hand-over
+    u = ls["use_b"]
+    assert np.all(np.abs(ls["light"][u] - lights[u]) < 3 * ls["light_err"][u] + 0.05 * lights[u])
+    m = metric_table(points)
+    lin = metric_linearity(*m["A anode charge (PE)"], ls["light"], ls["light_err"], ls["window"])
+    assert lin["cross"][0.05] == pytest.approx(SAT / 19, rel=0.3)

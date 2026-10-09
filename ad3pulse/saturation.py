@@ -277,17 +277,27 @@ def count_pulses(v: np.ndarray, t: np.ndarray, window: tuple[float, float], thre
 
 @dataclass
 class SmoothFit:
-    """log y = polynomial(x) fitted with weights; evaluate with value() and error()."""
+    """log y = polynomial(x) fitted with weights; evaluate with value() and error().
+
+    With *spline* set, value() uses a weighted smoothing spline in log y and
+    error() a bootstrap band (``spline_err``) instead of the polynomial.
+    """
 
     coef: np.ndarray
     cov: np.ndarray
     x0: float  # centring of x for numerical stability
+    spline: object = None
+    spline_err: object = None
 
     def value(self, x) -> np.ndarray:
+        if self.spline is not None:
+            return np.exp(self.spline(np.asarray(x, dtype=float)))
         return np.exp(np.polyval(self.coef, np.asarray(x, dtype=float) - self.x0))
 
     def error(self, x) -> np.ndarray:
-        """1-sigma error of value(x) from the coefficient covariance."""
+        """1-sigma error of value(x) (coefficient covariance, or the spline's bootstrap band)."""
+        if self.spline is not None:
+            return self.value(x) * self.spline_err(np.asarray(x, dtype=float))
         x = np.asarray(x, dtype=float) - self.x0
         deg = len(self.coef) - 1
         jac = np.stack([x ** (deg - i) for i in range(deg + 1)], axis=-1)
@@ -320,6 +330,35 @@ def smooth_log_fit(x, y, yerr, deg: int = 3) -> SmoothFit:
     if dof > 0 and chi2 / dof > 1:
         cov = cov * chi2 / dof  # inflate if points scatter more than their errors
     return SmoothFit(coef, cov, x0)
+
+
+def smooth_log_spline(x, y, yerr, n_boot: int = 100, seed: int = 0) -> SmoothFit:
+    """Weighted smoothing spline of log(y) against x (points may repeat in x, e.g. up/down sweeps).
+
+    The smoothing factor is the number of points (chi2 per point ~ 1). The error
+    band is the rms of refits to data resampled within their errors.
+    """
+    from scipy.interpolate import UnivariateSpline, interp1d
+
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float); yerr = np.asarray(yerr, dtype=float)
+    ok = (y > 0) & (yerr > 0)
+    xs, ys, es = x[ok], y[ok], yerr[ok]
+    # merge repeated x (up and down sweeps) with inverse-variance weights
+    ux = np.unique(xs)
+    my = np.array([np.average(ys[xs == u], weights=1 / es[xs == u] ** 2) for u in ux])
+    me = np.array([1 / np.sqrt(np.sum(1 / es[xs == u] ** 2)) for u in ux])
+    if len(ux) < 5:
+        raise ValueError(f"need at least 5 distinct x with positive y, have {len(ux)}")
+
+    def fit(yy):
+        yy = np.maximum(yy, 1e-3 * my)
+        return UnivariateSpline(ux, np.log(yy), w=yy / me, k=3, s=len(ux))
+
+    spl = fit(my)
+    rng = np.random.default_rng(seed)
+    boots = np.array([fit(my + me * rng.standard_normal(len(my)))(ux) for _ in range(n_boot)])
+    band = interp1d(ux, boots.std(axis=0), bounds_error=False, fill_value=(boots.std(axis=0)[0], boots.std(axis=0)[-1]))
+    return SmoothFit(np.zeros(1), np.zeros((1, 1)), 0.0, spline=spl, spline_err=band)
 
 
 def align_shift(t: np.ndarray, a: np.ndarray, b: np.ndarray, max_shift_s: float = 50e-9) -> float:
@@ -355,6 +394,6 @@ def rise_time(t: np.ndarray, v: np.ndarray, lo: float = 0.1, hi: float = 0.9) ->
 
 __all__ = [
     "npe", "peak_current", "binned_charge", "fwhm", "PointSummary", "summarize_point",
-    "step_height", "count_pulses", "SmoothFit", "smooth_log_fit", "align_shift", "rise_time",
+    "step_height", "count_pulses", "SmoothFit", "smooth_log_fit", "smooth_log_spline", "align_shift", "rise_time",
     "Linearity", "linearity", "light_scale", "crossing", "shape_ratio", "late_early", "flag_reference", "burst_frames",
 ]
