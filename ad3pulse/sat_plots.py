@@ -39,8 +39,10 @@ def plot_ratio_scan(rows: list[dict], kres: dict, title: str = ""):
     ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("photoelectrons per pulse")
     ax.set_title(title or "joint occupancy scan", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     ax = axes[1]
-    ok = np.isfinite(kres["k"]) & np.isfinite(kres["k_err"]) & (kres["k_err"] < kres["k"])
-    use = kres["use"]
+    k_err = np.abs(kres["k_err"])  # a negative k (B below zero) gives a negative propagated error
+    ok = np.isfinite(kres["k"]) & np.isfinite(k_err) & (kres["k"] > 0) & (k_err < kres["k"])
+    kres = {**kres, "k_err": k_err}
+    use = kres["use"] & ok
     ax.errorbar(amp[ok & ~use], kres["k"][ok & ~use], yerr=kres["k_err"][ok & ~use], fmt="o", ms=4, mfc="none",
                 color="0.5", capsize=2, label="not used (B too dim or A too bright)")
     ax.errorbar(amp[use], kres["k"][use], yerr=kres["k_err"][use], fmt="o", ms=4, color="C3", capsize=2, label="used")

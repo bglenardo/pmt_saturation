@@ -332,3 +332,28 @@ def test_apply_scale_reads_back_and_uses_actual_values(tmp_path) -> None:
     s.set_scale(1, 0.1)                                                  # wants +0.3 V, scope keeps +0.03 V
     assert s.settings.offset_actual[1] == pytest.approx(0.03)            # actual offset recorded ...
     assert s.settings.offset_v(1) == pytest.approx(0.03)                 # ... and used for the screen range
+
+
+def test_choose_scale_hysteresis() -> None:
+    # 0.53 V: fits 0.1 V/div at 80 % (0.56 V) but not at the 60 % needed to step down from 0.2
+    assert choose_scale(-0.53, False, 0.2, 3.0) == 0.2
+    assert choose_scale(-0.53, False, 0.05, 3.0) == 0.1          # stepping up uses 80 %
+    assert choose_scale(-0.40, False, 0.2, 3.0) == 0.1           # well inside: steps down
+
+
+def test_autorange_never_raises_on_oscillation(tmp_path) -> None:
+    from ad3pulse.acquire import ScopeSettings as SS
+    ad3 = FakeAD3()
+    scope = FakeScope({1: 0.1}, ad3)
+    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.05}), ad3, rate_hz=2.0, out_dir=tmp_path,
+                     scope_factory=lambda r: scope).open()
+    peaks = iter([0.60, 0.50, 0.60, 0.50, 0.60, 0.50, 0.60, 0.50])   # scatter around the 0.1/0.2 boundary
+    orig = scope.record_frames
+
+    def noisy(n_frames, channels, timeout_s=60.0, mode="NORM"):
+        scope.peaks[1] = next(peaks) / ad3.amplitudes[-1]
+        return orig(n_frames, channels, timeout_s, mode)
+
+    scope.record_frames = noisy
+    scales = autorange(s, 1.0, (-500e-9, -300e-9), max_peak_v=2.0, max_steps=6)
+    assert scales[1] in (0.1, 0.2)                               # settles, no RuntimeError

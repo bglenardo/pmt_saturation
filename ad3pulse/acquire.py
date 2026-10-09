@@ -111,19 +111,22 @@ def screen_range(scale_v_div: float, offset_v: float) -> tuple[float, float]:
 
 
 def choose_scale(peak_v: float, clipped: bool, current: float, offset_div: float,
-                 ladder=SCALE_LADDER_V_DIV, fill: float = 0.8) -> float:
-    """V/div for a negative pulse of |peak_v| volts (smallest that keeps it within *fill*).
+                 ladder=SCALE_LADDER_V_DIV, fill: float = 0.8, fill_down: float = 0.6) -> float:
+    """V/div for a pulse of |peak_v| volts: the smallest that keeps it within *fill*.
 
-    If the probe was clipped the true peak is unknown, so step two rungs above
-    *current* and probe again.
+    With hysteresis: a finer scale than *current* is only chosen if the pulse
+    fits within *fill_down* of it, so a peak near a boundary (scatter between
+    probes) does not flip the scale back and forth. If the probe was clipped
+    the true peak is unknown, so step two rungs above *current* and probe again.
     """
     ladder = sorted(ladder)
     if clipped:
         above = [s for s in ladder if s > current]
         return above[min(1, len(above) - 1)] if above else ladder[-1]
-    span_div = SCOPE_DIVISIONS / 2 + offset_div  # divisions below 0 V
+    span_div = SCOPE_DIVISIONS / 2 + offset_div  # divisions on the pulse side of 0 V
     for s in ladder:
-        if abs(peak_v) <= fill * span_div * s:
+        limit = fill if s >= current else fill_down
+        if abs(peak_v) <= limit * span_div * s:
             return s
     return ladder[-1]
 
@@ -334,20 +337,32 @@ def autorange(session: ScopeSession, amplitude: float, baseline_window: tuple[fl
     """
     s = session.settings
     channels = channels or s.pmt_channels
+    seen = {ch: {s.pmt_scale_v_div[ch]} for ch in channels}
+    frozen: set[int] = set()
     for _ in range(max_steps):
         fs = session.acquire(amplitude, n_probe, "probe", channels=channels, save=False)
         checks = check_peaks(fs, s, baseline_window, max_peak_v)
         changed = False
         for ch, c in checks.items():
+            if ch in frozen:
+                continue
             lad = ladder if ladder is not None else LADDERS[s.imp(ch)]
             new = choose_scale(c.peak_v, c.clipped, s.pmt_scale_v_div[ch], s.offset_div(ch),
                                lad, fill)
-            if new != s.pmt_scale_v_div[ch]:
-                session.set_scale(ch, new)
-                changed = True
+            if new == s.pmt_scale_v_div[ch]:
+                continue
+            if new in seen.setdefault(ch, set()) and new < s.pmt_scale_v_div[ch]:
+                frozen.add(ch)  # going back to a finer scale already tried: keep the coarser one
+                continue
+            seen[ch].add(new)
+            session.set_scale(ch, new)
+            changed = True
         if not changed:
             return dict(s.pmt_scale_v_div)
-    raise RuntimeError(f"auto-range did not settle in {max_steps} steps: {s.pmt_scale_v_div}")
+    # Never abort a run over ranging: keep the current (last, coarser) scales, which the
+    # peak guard has already checked.
+    print(f"    auto-range did not settle in {max_steps} steps; using {s.pmt_scale_v_div}")
+    return dict(s.pmt_scale_v_div)
 
 
 __all__ = [
