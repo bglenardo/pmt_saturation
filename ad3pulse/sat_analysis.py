@@ -267,7 +267,10 @@ def light_scale_matched(points: list[ScanPoint], b, b_err, a_window: tuple[float
     sig = (b >= b_min) & (b > 3 * be)
     fit = smooth_log_spline(amp[sig], b[sig], be[sig])
     bf, bfe = fit.value(amp), fit.error(amp)
-    win = (a >= a_window[0]) & (a <= a_window[1]) & sig
+    # only points before A's maximum: with long pulses A's charge falls again past the knee,
+    # so an A window alone would also pick up deeply saturated points
+    pre_knee = amp < amp[int(np.nanargmax(a))]
+    win = (a >= a_window[0]) & (a <= a_window[1]) & sig & pre_knee
     if win.sum() < 2:
         raise ValueError(f"fewer than 2 points with A in {a_window} and a significant B")
     r = a[win] / bf[win]
@@ -275,7 +278,7 @@ def light_scale_matched(points: list[ScanPoint], b, b_err, a_window: tuple[float
     w = 1 / re ** 2
     k = float(np.sum(w * r) / np.sum(w))
     k_err = float(np.sqrt(1 / np.sum(w) * max(1.0, np.sum(w * (r - k) ** 2) / max(win.sum() - 1, 1))))
-    use_b = a > a_window[1]
+    use_b = (a > a_window[1]) | ~pre_knee
     light = np.where(use_b, k * bf, a)
     light_err = np.where(use_b, light * np.hypot(bfe / bf, k_err / k), ae)
     return {"amp": amp, "light": light, "light_err": light_err, "use_b": use_b, "fit": fit, "b": b,

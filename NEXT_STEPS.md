@@ -193,6 +193,13 @@ valid and no k can be taken from that scan. **Step 3 must auto-range each channe
   - `burst_frames`, `linearity`, `light_scale` and `crossing` (`ad3pulse/saturation.py`);
   - `ScopeSession` and `autorange` (`ad3pulse/acquire.py`).
 
+## Outcome (2026-10-08 evening)
+**Round 2 is done.** See `results/saturation_r2_2026-10-08/README.md`.
+- The plan was carried out, with two changes:
+  - the light scale is **matched** (B spline × k fitted where A is linear), not the fixed ratio-scan k;
+  - long pulses use NORM 1000-point replay at 20 ns (full-depth replay isn't possible), so B is measured by
+    charge, not counting.
+
 ## Progress (2026-10-08)
 - **Steps 0–1:** done.
 - **Code for steps 2–5:** written and tested offline in `saturation_r2.ipynb`, `ad3pulse/sat_analysis.py` and

@@ -294,32 +294,28 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   The reach scan (16 points × 30 pulses at 2 Hz) took ~10 min.
 
 ## Status and next steps
-**Where things stand (end of 2026-10-07, ~21:00):** the HV is **off** on both channels. The full saturation
-characterisation of PMT A is done in both regimes, against the new PMT B; see
-**`results/saturation_2026-10-07_newB/README.md`**. Earlier, noisy-B results are in `results/saturation_short_2026-10-07/`.
+**Where things stand (2026-10-08, ~21:30):** the HV is **off** on both channels. **Round 2 is done:**
+`results/saturation_r2_2026-10-08/README.md`. Round 1 is in `results/saturation_2026-10-07_newB/`, and the plan
+that round 2 followed is `NEXT_STEPS.md`.
 
-- **Done:**
-  - Ethernet control of the Rigol and ISEG;
-  - the AD3 pulse train and the frame recorder (with re-armed triggering);
-  - SPE calibration of A and of the new B. A: Q1 = 0.904 pC (`results/spe_2026-10-07/` has the morning
-    0.949 pC). New B: Q1 = 1.09 pC, gain 6.8e6;
-  - saturation, short and long, run unattended with `scripts/run_saturation_chain.sh`.
-- **Results (PMT A at −1550 V):**
-  - **100 ns pulses:** 5 % low at ~1,180 PE (≈ 24.5 mA peak), 10 % low at ~1,510 PE (≈ 27 mA). Peak current
-    saturates at ~38 mA.
-  - **10 µs pulses:** linear to at least ~36,000 PE (≈ 32 nC per pulse). By ~150,000 PE it is 60 % low, and the
-    current collapses after the base has delivered ~55 nC.
-  - The new B is clean up to ~9 nC per pulse in 10 µs.
-- **Approved plan for the next round: `NEXT_STEPS.md`.** It covers k from a joint occupancy scan, finer knee
-  scans, better long-pulse sampling, and the **Ch4 dynode-8 pickoff** (4.7 nF, at 50 Ω and 1 MΩ, with 1 MΩ
-  stopped at ~3 V). Ch4 was added by the user on 2026-10-08.
-- **Open questions and next steps** (see that README):
-  - finer amplitude steps around the knees: 1.81–1.90 V (long) and 2.0–2.2 V (short);
-  - more statistics on the A/B slope k;
-  - why k differs between regimes (1779 short vs 677 long). Candidates are B's long-window afterpulses, and
-    B's long-window noise, which comes from the 50 ns sampling;
-  - a better long-pulse readout. NORM replay gives only 1000 screen points;
-  - optionally, characterise B with the roles swapped.
+- **Results (PMT A at −1550 V; light in A PE per pulse):**
+  - **100 ns pulses:** anode charge 5 % low at ~1330 PE, 10 % at ~1590 PE. The peak saturates at ~39 mA.
+  - **Dynode 8 (Ch4)** is only ~3–5 % more linear (5 % low at ~1370 PE at 50 Ω and ~1390 PE at 1 MΩ). Relative
+    to dynode 8 the anode is 5 % low at ~2300 PE.
+  - **10 µs pulses:** 5 % low at ~33 400 PE (≈ 31 nC), 10 % at ~37 400 PE. The delivered charge tops out at
+    ~38 nC and then falls. Dynode 8 collapses with the anode (same shapes).
+- **The A:B light ratio depends on the regime** (k = 2395 for short pulses against 1105 for long; round 1:
+  1779 against 677). So **B is not a drive-independent light reference**, presumably because the LED's emission
+  pattern or spectrum changes. The analysis uses a "matched" light scale (B spline × k fitted where A is
+  linear).
+- **Limitations:**
+  - 50 Ω dynode-8 "charge" for 10 µs pulses is high-passed (RC 235 ns), so it follows the current, not the
+    charge;
+  - 1 MΩ data stop at 3 V: short pulses up to ~2350 PE, long pulses only up to ~1600 PE.
+- **Next (proposals):**
+  - an independent light reference (ND filter on A, a second LED for A + B = AB, or a photodiode);
+  - attenuating the 1 MΩ pickoff so long-pulse dynode-8 charge can be followed through depletion;
+  - pulse-model fits of the saved waveforms.
 - **Still untested on hardware:** the peak guard actually tripping; `TRIGGER_MODE = "ad3"` in
   `pmt_bias_test.ipynb`.
 - **Uncommitted, user's files:** `.vscode/` and `Untitled-7.ipynb` are left untracked on purpose.

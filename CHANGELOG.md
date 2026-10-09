@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-08 (evening): round-2 results
+
+**Added**
+- **`results/saturation_r2_2026-10-08/`:**
+  - joint occupancy scan (k = 2674 ± 250; A and B charge/Q1 agree with their zero-PE μ);
+  - short and long scans of PMT A with Ch4 = dynode 8 at 50 Ω and 1 MΩ;
+  - matched light scale; linearity of anode and dynode 8; Ch1/Ch4 shape overlays.
+- **`ad3pulse.saturation.smooth_log_spline` and `sat_analysis.light_scale_matched`** (with a pre-knee window
+  for long pulses), plus notebook `LIGHT_MODE` / `MATCH_A_WINDOW`.
+- `RigolScope.drain()`, `pytest.ini`, `scripts/rigol_replay_check.py`, and `run_r2_chain.sh [Q1_A Q1_B]`.
+
+**Changed**
+- **Auto-range:** hysteresis (step down only within 60 % of the finer scale), and it never aborts a run.
+- **Scope:** read-back of scale/offset after every change, zero offset at 1 MΩ, and memory depth verified on
+  open.
+
 ## 2026-10-08: round-2 code (k scan, Ch4 dynode-8 pickoff, finer scans); tested offline only
 
 **Added**
