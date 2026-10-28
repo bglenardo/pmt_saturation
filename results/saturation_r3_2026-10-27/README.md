@@ -33,6 +33,16 @@ in `runs/saturation_r3/reach/`. Plots here come from `scripts/r3_writeup.py` (sa
 - **A: Q1 = 0.9353 ± 0.011 pC** (gain 5.84 × 10⁶); **B: Q1 = 1.089 ± 0.014 pC** (6.8 × 10⁶). Both within ~2–4 %
   of round 2.
 
+![Occupancy scan](occupancy_scan.png)
+
+![SPE fits](spe_fit.png)
+
+- Occupancy scan (100 ns, 1 kHz, 500 pulses per point): μ against LED amplitude for each PMT; the green band is
+  the target. Raw data `runs/spe/scan_*_20261027_105341.npz`, log `runs/spe/scan_r3.log`.
+- SPE fits (5000 pulses each, at 1.738 V for A and 1.836 V for B): μ = 0.217 (A) and 0.153 (B). Both show a clear
+  single-PE peak well separated from the pedestal, and the control window (dark counts) is small. Raw data
+  `runs/spe/cal_ch*_part00_*_20261027_124903.npz`, log `runs/saturation_r3/cal_20261027_124902.log`.
+
 ## Light ratio k at low light
 
 ![Ratio scan](ratio_scan.png)
