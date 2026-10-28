@@ -80,8 +80,13 @@ def plot_vs_led(points, metrics: dict, regime: str):
     return fig
 
 
-def plot_a_vs_b(points, ls: dict, k: float, regime: str):
-    """A against B, and B against LED voltage with the smooth light-curve fit."""
+def plot_a_vs_b(points, ls: dict, k: float, regime: str, light_axes: str = "semilogy"):
+    """A against B, and B against LED voltage with the smooth light-curve fit.
+
+    *light_axes* sets the light-curve panel's axes: "semilogy" (log B, the default), "linear" or "loglog".
+    """
+    if light_axes not in ("semilogy", "linear", "loglog"):
+        raise ValueError(f"light_axes must be 'semilogy', 'linear' or 'loglog', not {light_axes!r}")
     plt = _plt()
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
     amp = ls["amp"]; sweep = np.array([p.sweep for p in points])
@@ -97,14 +102,23 @@ def plot_a_vs_b(points, ls: dict, k: float, regime: str):
     ax = axes[1]
     sig = ls["b_sig"]
     ax.errorbar(amp[sig], ls["b"][sig], yerr=ls["b_err"][sig], fmt="o", ms=4, capsize=2, label="B (significant)")
-    ax.errorbar(amp[~sig], np.maximum(ls["b"][~sig], 1e-4), yerr=ls["b_err"][~sig], fmt="o", ms=4, mfc="none",
+    floor = 1e-4 if light_axes != "linear" else -np.inf
+    ax.errorbar(amp[~sig], np.maximum(ls["b"][~sig], floor), yerr=ls["b_err"][~sig], fmt="o", ms=4, mfc="none",
                 color="0.6", capsize=2, label="B (not used)")
     vv = np.linspace(ls["v_on"], amp.max(), 100)
     f = ls["fit"]
     ax.plot(vv, f.value(vv), "C3", lw=1, label="smooth fit (light curve / k)")
     ax.fill_between(vv, f.value(vv) - f.error(vv), f.value(vv) + f.error(vv), color="C3", alpha=0.2)
-    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
-    ax.set_title("light curve from B", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    if light_axes != "linear":
+        ax.set_yscale("log")
+    if light_axes == "loglog":
+        from matplotlib.ticker import FormatStrFormatter, MultipleLocator
+        ax.set_xscale("log")
+        ax.xaxis.set_major_locator(MultipleLocator(0.2)); ax.xaxis.set_minor_locator(MultipleLocator(0.05))
+        ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f")); ax.xaxis.set_minor_formatter(FormatStrFormatter(""))
+    ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
+    ax.set_title(f"light curve from B ({'linear' if light_axes == 'linear' else light_axes.replace('semilogy', 'log y')} axes)",
+                 fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.tight_layout()
     return fig
 

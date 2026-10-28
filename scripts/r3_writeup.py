@@ -61,6 +61,8 @@ for regime, sweeps in (("short", ("up",)), ("long", ("up", "down"))):
             else ("expected anode charge, light × Q1 (nC)", ls["light"] * Q1[A_CH] / 1e3)),
         "shapes": sat_plots.plot_shapes_ch1_ch4(pts, ls["light"], cfg, regime),
     }
+    for axes in ("linear", "loglog"):
+        figs[f"a_vs_b_{axes}"] = sat_plots.plot_a_vs_b(pts, ls, ls["k"], regime, light_axes=axes)
     for name, fig in figs.items():
         if fig is not None:
             fig.savefig(DEST / f"{regime}_{name}.png", dpi=140)

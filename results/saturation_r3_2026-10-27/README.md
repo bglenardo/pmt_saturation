@@ -119,7 +119,7 @@ not reliable; **the charge metrics are the linearity measures.**
 
 ![Short shapes](short_shapes.png)
 
-Also here: `short_vs_led.png`, `short_a_vs_b.png`.
+Also here: `short_vs_led.png`, `short_a_vs_b.png` (light curve from B on a log-y axis; copies with linear and log-log axes in `short_a_vs_b_linear.png` and `short_a_vs_b_loglog.png`).
 
 ## Long pulses (10 µs): depletion (treat with caution)
 
@@ -146,7 +146,7 @@ All long data were taken after the shift, and the two sweeps agree, so both are 
 
 ![Long shapes](long_shapes.png)
 
-Also here: `long_vs_led.png`, `long_a_vs_b.png`, `summary.json` (k_match and all crossings).
+Also here: `long_vs_led.png`, `long_a_vs_b.png` (light curve from B on a log-y axis; copies with linear and log-log axes in `long_a_vs_b_linear.png` and `long_a_vs_b_loglog.png`), `summary.json` (k_match and all crossings).
 
 ## Code changes this round
 
