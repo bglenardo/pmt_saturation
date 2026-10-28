@@ -270,3 +270,34 @@ def plot_ab_ratio(results: dict, title: str = ""):
     ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.tight_layout()
     return fig
+
+
+def plot_waveforms(points, regime: str, sweep: str = "up", xlim_us: tuple[float, float] | None = None,
+                   n_legend: int = 10, titles: dict | None = None):
+    """Mean anode current of A (Ch1) and B (Ch2) against time, one curve per LED amplitude.
+
+    Colours run along viridis from the dimmest to the brightest point of *sweep*; the legend lists about
+    *n_legend* of the amplitudes.
+    """
+    plt = _plt()
+    pts = sorted((p for p in points if p.sweep == sweep), key=lambda p: p.amp)
+    if not pts:
+        raise ValueError(f"no {sweep}-sweep points")
+    cmap = plt.get_cmap("viridis")
+    titles = titles or {1: "PMT A (Ch1)", 2: "PMT B (Ch2)"}
+    labelled = set(np.unique(np.round(np.linspace(0, len(pts) - 1, min(n_legend, len(pts)))).astype(int)))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.4))
+    for ax, ch in zip(axes, (1, 2)):
+        for j, p in enumerate(pts):
+            t_us = p.r50["t"] * 1e6
+            i_ma = -p.r50["ch"][ch]["mean_v"] / 50.0 * 1e3
+            ax.plot(t_us, i_ma, lw=0.9, color=cmap(j / max(len(pts) - 1, 1)),
+                    label=f"{p.amp:.2f} V" if j in labelled else None)
+        if xlim_us is not None:
+            ax.set_xlim(*xlim_us)
+        ax.set_xlabel("time from trigger (µs)"); ax.set_ylabel("mean anode current (mA)")
+        ax.set_title(f"{titles[ch]}: {regime} pulses, {sweep}-sweep", fontsize=9)
+        ax.grid(alpha=.3)
+    axes[0].legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    return fig

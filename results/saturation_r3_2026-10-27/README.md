@@ -117,6 +117,10 @@ not reliable; **the charge metrics are the linearity measures.**
   k_match 23.1 and a 5 % knee at 5640 PE, which is wrong. `scripts/r3_short_by_sweep.py` analyses the sweeps
   separately.
 
+![Short waveforms](short_waveforms.png)
+
+Mean anode current of A and B at every up-sweep LED amplitude (viridis: dim → bright). A flat-tops at ~38 mA; B, with ~28× less light, stays linear-shaped.
+
 ![Short shapes](short_shapes.png)
 
 Also here: `short_vs_led.png`, `short_a_vs_b.png` (light curve from B on a log-y axis; copies with linear and log-log axes in `short_a_vs_b_linear.png` and `short_a_vs_b_loglog.png`).
@@ -143,6 +147,10 @@ All long data were taken after the shift, and the two sweeps agree, so both are 
   late/early ratio rises steadily from 1.03–1.09 (≲ 3 nC, LED ≤ 1.89 V) to 1.16 at 5 nC (1.93 V), 1.28 at
   11 nC (2.0 V) and 1.44 at 22 nC (2.08 V), so for long pulses B is a clean reference only up to about
   1.9–2.0 V LED. The old note that "B has fewer base capacitors" was about the original B tube.
+
+![Long waveforms](long_waveforms.png)
+
+Mean anode current of A and B at every up-sweep LED amplitude (viridis: dim → bright). A's current collapses ever earlier in the pulse as the light rises; B only starts to droop at the brightest points (2.4 and 3.0 V).
 
 ![Long shapes](long_shapes.png)
 
