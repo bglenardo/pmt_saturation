@@ -6,6 +6,7 @@
 #   bash scripts/run_r2_chain.sh <A amplitude V> <B amplitude V> [Q1_A Q1_B] > runs/saturation_r2/chain.log 2>&1
 #
 # With Q1_A Q1_B (pC) the SPE calibration is skipped and those values are used.
+# OUT=<dir> writes the saturation data and logs there (default runs/saturation_r2), e.g. OUT=runs/saturation_r3.
 # HV must already be on at the operating points (box dark).
 # Do not open other connections to the scope while this runs: they break the session.
 set -u
@@ -17,7 +18,7 @@ PY=.venv/Scripts/python
 RUN="$PY scripts/run_spe_notebook.py"
 NB="--notebook saturation_r2.ipynb"
 STAMP=$(date +%Y%m%d_%H%M%S)
-LOG=runs/saturation_r2
+LOG=${OUT:-runs/saturation_r2}
 mkdir -p $LOG
 
 hv_off() {
@@ -41,7 +42,7 @@ if [ -z "$Q1A" ] || [ -z "$Q1B" ]; then
     echo "calibration did not give Q1 for both PMTs; stopping"
     exit 1
 fi
-Q1="Q1_PC = {1: $Q1A, 2: $Q1B}"
+Q1="Q1_PC = {1: $Q1A, 2: $Q1B}; OUTPUT_DIR = '$LOG'"
 echo "Q1: A $Q1A pC, B $Q1B pC"
 
 echo "=== $(date) joint occupancy scan (k)"

@@ -228,3 +228,31 @@ def plot_shape_metrics(points, light, regime: str):
 
 __all__ = ["plot_ratio_scan", "plot_vs_led", "plot_a_vs_b", "plot_linearity", "plot_shapes_ch1_ch4",
            "plot_shape_metrics"]
+
+
+def plot_ab_ratio(results: dict, title: str = ""):
+    """A/B light ratio against LED voltage for several regimes on one axis.
+
+    *results* maps a regime name to ab_ratio() output. Filled markers are the points with both
+    PMTs linear; dashed lines their weighted means. Proportional PMTs give one flat line.
+    """
+    plt = _plt()
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    for i, (name, r) in enumerate(results.items()):
+        col = f"C{i}"
+        ok = np.isfinite(r["ratio"]) & (r["ratio"] > 0) & np.isfinite(r["ratio_err"]) & (r["ratio_err"] < r["ratio"])
+        for sw in ("up", "down"):
+            sel = ok & (r["sweep"] == sw)
+            u, n = sel & r["use"], sel & ~r["use"]
+            ax.errorbar(r["amp"][u], r["ratio"][u], yerr=r["ratio_err"][u], fmt=MARKERS[sw], ms=4, capsize=2, color=col,
+                        label=f"{name} ({sw})" if u.any() else None)
+            ax.errorbar(r["amp"][n], r["ratio"][n], yerr=r["ratio_err"][n], fmt=MARKERS[sw], ms=4, capsize=2,
+                        color=col, mfc="none", alpha=0.4)
+        ax.axhline(r["mean"], color=col, ls="--", lw=0.8,
+                   label=f"{name}: A/B = {r['mean']:.4g} ± {r['mean_err']:.2g}, "
+                         f"slope {r['slope_per_V']:.3g} ± {r['slope_err']:.2g} /V")
+    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("A / B (PE / PE)")
+    ax.set_title(title or "A/B light ratio (open: B insignificant, or A past its linear range)", fontsize=9)
+    ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig

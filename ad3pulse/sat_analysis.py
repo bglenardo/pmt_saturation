@@ -180,7 +180,12 @@ def load_scan(out_dir, regime: str, cfg: dict, q1_pc: dict, stamp: str | None = 
         if not f.stem.endswith(run):
             continue
         sweep = "up" if f"{regime}_up_" in f.name else "down"
-        r50 = summarize_frames(FrameSet.load(f), cfg, q1_pc)
+        fs = FrameSet.load(f)
+        width = fs.meta.get("width_s")
+        if width is not None and abs(float(width) - cfg["width_s"]) > 1e-12:
+            raise ValueError(f"{f.name}: recorded with {float(width) * 1e9:g} ns pulses, but the windows are for "
+                             f"{cfg['width_s'] * 1e9:g} ns (set SHORT_WIDTH_S)")
+        r50 = summarize_frames(fs, cfg, q1_pc)
         f1m = f.with_name(f.name.replace(f"{regime}_{sweep}_", f"{regime}_{sweep}1M_"))
         r1m = summarize_frames(FrameSet.load(f1m), cfg, q1_pc) if f1m.exists() else None
         points.append(ScanPoint(sweep, r50["amplitude_V"], r50, r1m))
@@ -330,8 +335,43 @@ def metric_linearity(value, err, light, light_err, fit_mask, levels=(0.05, 0.10)
     return {"scale": s, "scale_err": s_err, "dev": dev, "dev_err": dev_err, "cross": cross, "n_fit": int(ok.sum())}
 
 
+def ab_ratio(points: list[ScanPoint], a_max: float, b=None, b_err=None, b_min: float = 0.05) -> dict:
+    """A/B light ratio per point (both in PE), and which points have both PMTs linear.
+
+    A point is used when B is significant (>= *b_min* and > 3 sigma), A is at most *a_max* PE and
+    the point lies before A's maximum (long pulses: A's charge falls again past the knee).
+    *b*, *b_err* default to B's charge / Q1 (pass b_measure() output for photon counts).
+    """
+    amp = np.array([p.amp for p in points])
+    a = np.array([p.r50["ch"][1]["pe"] for p in points]); ae = np.array([p.r50["ch"][1]["pe_err"] for p in points])
+    if b is None:
+        b = np.array([p.r50["ch"][2]["pe"] for p in points]); b_err = np.array([p.r50["ch"][2]["pe_err"] for p in points])
+    b, be = np.asarray(b, float), np.asarray(b_err, float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = a / b
+        re = np.abs(r) * np.hypot(ae / a, be / b)
+    pre_knee = amp < amp[int(np.nanargmax(a))]
+    use = (b >= b_min) & (b > 3 * be) & (a <= a_max) & pre_knee & np.isfinite(re) & (re > 0)
+    if use.sum() < 1:
+        raise ValueError(f"no points with a significant B and A <= {a_max} PE")
+    w = 1 / re[use] ** 2
+    mean = float(np.sum(w * r[use]) / np.sum(w))
+    chi2 = float(np.sum(w * (r[use] - mean) ** 2))
+    dof = max(int(use.sum()) - 1, 1)
+    # slope of the ratio against LED voltage: 0 if the light share does not depend on drive
+    slope, slope_err = np.nan, np.nan
+    if use.sum() >= 3:
+        x = amp[use]; sw = np.sum(w); xm = np.sum(w * x) / sw
+        sxx = np.sum(w * (x - xm) ** 2)
+        slope = float(np.sum(w * (x - xm) * (r[use] - mean)) / sxx)
+        slope_err = float(np.sqrt(1 / sxx * max(1.0, chi2 / dof)))
+    return {"amp": amp, "ratio": r, "ratio_err": re, "use": use, "sweep": np.array([p.sweep for p in points]),
+            "mean": mean, "mean_err": float(np.sqrt(1 / np.sum(w) * max(1.0, chi2 / dof))),
+            "chi2_dof": chi2 / dof, "slope_per_V": slope, "slope_err": slope_err}
+
+
 __all__ = [
     "ANODES", "DYNODE", "PULSER", "summarize_frames", "summarize_ratio", "ratio_k", "ScanPoint",
     "load_scan", "b_measure", "fit_k_prefix", "light_scale", "light_scale_matched", "metric_table",
-    "metric_linearity",
+    "metric_linearity", "ab_ratio",
 ]

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-28: round-3 results (new light geometry, 250 ns short pulses)
+
+**Added**
+- **`results/saturation_r3_2026-10-27/`:** A/B light ratio against drive and regime after the geometry change;
+  short (250 ns, up-sweep only) and long linearity of PMT A with dynode 8. Main findings: k ≈ 28 short against
+  ≈ 10–14 long (regime dependence unchanged), and a one-off shift of the light split during the run.
+- **`sat_analysis.ab_ratio()`** (A/B where both PMTs are linear, weighted mean and drive slope) and
+  **`sat_plots.plot_ab_ratio()`**, with a synthetic-data test.
+- `scripts/ab_ratio_check.py`, `scripts/r3_short_by_sweep.py`, `scripts/r3_writeup.py` (saved data only).
+- `run_r2_chain.sh`: `OUT=<dir>` selects the output directory.
+
+**Changed**
+- **Short pulses are 250 ns** (`SHORT_WIDTH_S`, `short_regime(w)` in `saturation_r2.ipynb`); windows follow the
+  width. The ratio cell no longer hard-codes 100 ns, and `load_scan` refuses files recorded with another width.
+- **Ratio-scan zero-PE threshold fixed at 0.25·Q1** (`RATIO_THRESHOLD_Q1`): the 3·MAD σ threshold was at or
+  above A's Q1 in the 400 ns window (k 29.5 → 27.8). The k json records the threshold.
+- Round-3 LED schedules for the ratio, short and long scans (round-2 ones kept in comments).
+
 ## 2026-10-08 (evening): round-2 results
 
 **Added**

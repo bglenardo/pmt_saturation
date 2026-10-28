@@ -71,7 +71,7 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
 5. **Data and docs to copy by hand:**
    - `Documentation/*.pdf` (manuals, gitignored);
    - `runs/` (raw data, gitignored; ~92 MB for the SPE runs) if you need to re-fit old data.
-6. **Check:** `.venv\Scripts\python -m pytest -q`, which should pass 37 tests with no hardware needed.
+6. **Check:** `.venv\Scripts\python -m pytest -q`, which should pass 55 tests with no hardware needed.
 
 ## Repository layout
 - `ad3pulse/`:
@@ -102,6 +102,8 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
   `--notebook X.ipynb cells TAG,TAG [overrides] [--hv-off]` for any notebook).
 - `results/<name>/`: committed summaries and plots (`spe_2026-10-07/` has the first calibration;
   `saturation_short_2026-10-07/` has the first short-pulse saturation look).
+- `scripts/run_r2_chain.sh`: the round-2/3 chain (`OUT=<dir>` picks the output directory).
+  `scripts/ab_ratio_check.py`, `r3_short_by_sweep.py` and `r3_writeup.py` re-analyse saved scans.
 - `runs/`: raw data (gitignored). `runs/spe/` and `runs/saturation/` hold `FrameSet` `.npz` files and
   `*.log` run logs.
 - `tests/`: pytest with fake instruments, plus synthetic-data tests for `spe.py` and `saturation.py`.
@@ -268,7 +270,10 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
 
 ## Saturation method (`ad3pulse/saturation.py`, `saturation.ipynb`)
 - **Two regimes (user's definition):**
-  - **short:** ~100 ns LED pulses probe the space-charge limit on peak anode current;
+  - **short:** ~100 ns LED pulses probe the space-charge limit on peak anode current. **From round 3 on they are
+    250 ns** (`SHORT_WIDTH_S` in `saturation_r2.ipynb`; the AD3's 100 ns squares are badly shaped). The windows
+    follow the width (`short_regime(w)`), and `load_scan` refuses files recorded with another width: pass
+    `SHORT_WIDTH_S = 100e-9` to re-analyse round-2 short data;
   - **long:** 10 µs pulses probe depletion of the base capacitors (current droops during the pulse).
 - **Pulse rate < 5 Hz in both** (default 2 Hz; the notebook asserts it) so the bases recharge between pulses.
   Exception: the `lowlight` cell (A/B slope statistics, A far from saturation) runs at 10 Hz (user's call).
@@ -278,8 +283,13 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   - **k fit:** k is fitted on the `FIT_POINTS` lowest-B significant points, stopping at the first one that fails a
     linearity cut. For long pulses that cut is A late/early ≥ 0.5: a depleted A gives *less* charge, so charge
     cuts can't exclude it.
-  - **Deviation** = A / light − 1. The light ratio is A:B ≈ 1800 (short) and ≈ 680 (long) with the new B.
-- **PMT B has fewer base capacitors** than A and may deplete first, especially with 10 µs pulses. Watch the
+  - **Deviation** = A / light − 1. The light ratio A:B was ≈ 1800–2400 (short) and ≈ 680–1100 (long) in rounds
+    1–2; with the round-3 geometry it is ≈ 28 (short) and ≈ 10–14 (long).
+  - **Ratio-scan occupancy threshold:** fixed at `RATIO_THRESHOLD_Q1` = 0.25·Q1. The 3·MAD σ threshold sat at or
+    above A's Q1 in the 400 ns window of 250 ns pulses and made k ~6 % high.
+- **PMT B's base:** the *original* B was thought to have fewer base capacitors. The current B holds far more
+  charge than A for 10 µs pulses (~84 nC against ~38 nC), but its late/early rises from ~3 nC on, so it is a
+  clean long-pulse reference only up to ~1.9–2.0 V LED (round 3). Watch the
   B self-check: B late/early ratio (long; > 2 % and > 3σ from low light) or mean-pulse FWHM (short; > 5 %).
   In A(t)/B(t), *falling* late in the pulse = A depleting; *rising* = B depleting. If B is flagged, stop and
   consider a base with more capacitors for B.
@@ -294,25 +304,33 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   The reach scan (16 points × 30 pulses at 2 Hz) took ~10 min.
 
 ## Status and next steps
-**Where things stand (2026-10-08, ~21:30):** the HV is **off** on both channels. **Round 2 is done:**
-`results/saturation_r2_2026-10-08/README.md`. Round 1 is in `results/saturation_2026-10-07_newB/`, and the plan
-that round 2 followed is `NEXT_STEPS.md`.
+**Where things stand (2026-10-28):** the HV is **off** on both channels. **Round 3 is done:**
+`results/saturation_r3_2026-10-27/README.md` (raw data `runs/saturation_r3/`). Round 2 is in
+`results/saturation_r2_2026-10-08/`, round 1 in `results/saturation_2026-10-07_newB/`.
 
-- **Results (PMT A at −1550 V; light in A PE per pulse):**
-  - **100 ns pulses:** anode charge 5 % low at ~1330 PE, 10 % at ~1590 PE. The peak saturates at ~39 mA.
-  - **Dynode 8 (Ch4)** is only ~3–5 % more linear (5 % low at ~1370 PE at 50 Ω and ~1390 PE at 1 MΩ). Relative
-    to dynode 8 the anode is 5 % low at ~2300 PE.
-  - **10 µs pulses:** 5 % low at ~33 400 PE (≈ 31 nC), 10 % at ~37 400 PE. The delivered charge tops out at
-    ~38 nC and then falls. Dynode 8 collapses with the anode (same shapes).
-- **The A:B light ratio depends on the regime** (k = 2395 for short pulses against 1105 for long; round 1:
-  1779 against 677). So **B is not a drive-independent light reference**, presumably because the LED's emission
-  pattern or spectrum changes. The analysis uses a "matched" light scale (B spline × k fitted where A is
-  linear).
+- **Round 3 geometry (user, 2026-10-27):** A and B at about the same position relative to the LED, B's
+  attenuator hole enlarged. Short pulses are now 250 ns. SPE: A Q1 = 0.9353 pC, B Q1 = 1.089 pC.
+- **Round 3 results (PMT A at −1550 V; light in A PE per pulse):**
+  - **k = A/B ≈ 28 for 250 ns** (ratio scan 27.8 ± 0.5, k_match 27.86 ± 0.19) and **≈ 10–14 for 10 µs**.
+    The regime dependence (long/short ≈ 0.49) is the same as in round 2 (0.46), so it is an LED property.
+  - **The light split changed once during the run** (short down-sweep: A −21 %, B +28 %), very likely the
+    mounting shifting. Data on either side reproduce. The user will make the mounting rigid. Analyse the short
+    sweeps separately (`scripts/r3_short_by_sweep.py`); the chain's mixed-sweep short result is wrong.
+  - **250 ns:** anode charge 5 % low at ~2960 PE, 10 % at ~4480 PE (100 ns, round 2: 1330/1590). The peak still
+    flattens at ~38 mA. Dynode 8 is ~3 % more linear.
+  - **10 µs:** 5 % low at ~42 800 PE, but uncertain at the 10–15 % level: long-pulse A/B varies with drive
+    (7.8–11.8; A's late/early rises 1.00 → 1.14 before depletion while B's stays flat). A's delivered charge
+    tops out at ~38 nC, as in round 2.
+- **Round 2 (100 ns):** anode charge 5 % low at ~1330 PE, 10 % at ~1590 PE, peak saturating at ~39 mA; 10 µs:
+  5 % low at ~33 400 PE. Dynode 8 collapses with the anode in both regimes.
+- **B is not a drive-independent light reference** across regimes. The analysis uses a "matched" light scale
+  (B spline × k fitted where A is linear), and `ab_ratio()` / `plot_ab_ratio()` show A/B against LED drive.
 - **Limitations:**
   - 50 Ω dynode-8 "charge" for 10 µs pulses is high-passed (RC 235 ns), so it follows the current, not the
     charge;
-  - 1 MΩ data stop at 3 V: short pulses up to ~2350 PE, long pulses only up to ~1600 PE.
+  - 1 MΩ data stop at 3 V.
 - **Next (proposals):**
+  - rigid mounting, then repeat the low-light ratio scan a few times to check k stays at ~28;
   - an independent light reference (ND filter on A, a second LED for A + B = AB, or a photodiode);
   - attenuating the 1 MΩ pickoff so long-pulse dynode-8 charge can be followed through depletion;
   - pulse-model fits of the saved waveforms.

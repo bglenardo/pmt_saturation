@@ -118,3 +118,25 @@ def test_matched_light_scale_is_continuous_and_finds_the_knee(tmp_path) -> None:
     m = metric_table(points)
     lin = metric_linearity(*m["A anode charge (PE)"], ls["light"], ls["light_err"], ls["window"])
     assert lin["cross"][0.05] == pytest.approx(SAT / 19, rel=0.3)
+
+
+def test_ab_ratio_flat_mean_and_drive_slope() -> None:
+    from ad3pulse.sat_analysis import ScanPoint, ab_ratio
+
+    amps = np.round(np.arange(1.6, 2.01, 0.05), 3)
+    b = 0.04 * np.exp(10 * (amps - 1.6))                 # B in PE: only the first point is below b_min
+    a = 3.0 * b * (1 + 0.5 * (amps - 1.6))               # light share grows with drive: slope 1.5 /V
+    a[-1] = 0.5 * a[-2]                                  # past the maximum (a[-2]): neither is used
+
+    def pts(a, b):
+        return [ScanPoint("up", float(v), {"ch": {1: {"pe": x, "pe_err": 0.001 * x},
+                                                 2: {"pe": y, "pe_err": 0.001 * y + 0.005}}})
+                for v, x, y in zip(amps, a, b)]
+
+    r = ab_ratio(pts(a, b), a_max=1e6)
+    assert not r["use"][0] and not r["use"][-2:].any() and r["use"][1:-2].all()
+    assert r["slope_per_V"] == pytest.approx(1.5, rel=0.05)
+    flat = ab_ratio(pts(3.0 * b, b), a_max=1e6)
+    assert flat["mean"] == pytest.approx(3.0, rel=1e-3)
+    assert abs(flat["slope_per_V"]) < 3 * flat["slope_err"]
+    assert ab_ratio(pts(3.0 * b, b), a_max=3.0 * b[3])["use"].sum() == 3   # A above a_max is excluded
