@@ -301,3 +301,51 @@ def plot_waveforms(points, regime: str, sweep: str = "up", xlim_us: tuple[float,
     axes[0].legend(fontsize=7, ncol=2)
     fig.tight_layout()
     return fig
+
+
+def plot_a_dy8_vs_b(points, ls: dict, k: float, regime: str, sweep: str = "up"):
+    """Like plot_a_vs_b, with PMT A's dynode-8 (Ch4, 50 Ohm) charge next to its anode charge.
+
+    The dynode charge is scaled to anode PE by the weighted mean anode/dynode ratio on the light-scale
+    window (``ls["window"]``), so both sit on k*B where A is linear. Only *sweep* points are drawn.
+    """
+    from .sat_analysis import metric_table
+    plt = _plt()
+    m = metric_table(points)
+    a, ae = m["A anode charge (PE)"]
+    d, de = m["dynode 8, 50 Ohm charge (pC)"]
+    sel = np.array([p.sweep == sweep for p in points])
+    win = ls["window"] & np.isfinite(d) & (d > 0)
+    r = a[win] / d[win]
+    re = r * np.hypot(ae[win] / a[win], de[win] / d[win])
+    w = 1 / re ** 2
+    s = float(np.sum(w * r) / np.sum(w))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
+    ax = axes[0]
+    b, be = ls["b"], ls["b_err"]
+    ax.errorbar(b[sel], a[sel], xerr=be[sel], yerr=ae[sel], fmt="o", ms=7, capsize=2, color=COLORS["A anode charge (PE)"], alpha=0.6,
+                label="anode charge (Ch1)")
+    ax.errorbar(b[sel], s * d[sel], xerr=be[sel], yerr=s * de[sel], fmt="D", ms=4, capsize=2, mfc="none",
+                color=COLORS["dynode 8, 50 Ohm charge (pC)"],
+                label=f"dynode 8 charge (Ch4, 50 Ω) × {s:.3g} PE/pC")
+    ok = b[sel][b[sel] > 0]
+    xx = np.geomspace(max(np.nanmin(ok), 1e-3), np.nanmax(ok), 50)
+    ax.plot(xx, k * xx, "k--", lw=0.8, label=f"linear, k = {k:.3g}")
+    ax.set_xscale("log"); ax.set_yscale("log"); ax.set_xlabel("B per pulse"); ax.set_ylabel("A (PE per pulse)")
+    ax.set_title(f"{regime}: A anode and dynode 8 against B ({sweep}-sweep)", fontsize=9)
+    ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    ax = axes[1]
+    sig = ls["b_sig"] & sel
+    amp = ls["amp"]
+    ax.errorbar(amp[sig], b[sig], yerr=be[sig], fmt="o", ms=4, capsize=2, label="B (significant)")
+    ns = ~ls["b_sig"] & sel
+    ax.errorbar(amp[ns], np.maximum(b[ns], 1e-4), yerr=be[ns], fmt="o", ms=4, mfc="none", color="0.6", capsize=2,
+                label="B (not used)")
+    vv = np.linspace(ls["v_on"], amp.max(), 100)
+    f = ls["fit"]
+    ax.plot(vv, f.value(vv), "C3", lw=1, label="smooth fit (light curve / k)")
+    ax.fill_between(vv, f.value(vv) - f.error(vv), f.value(vv) + f.error(vv), color="C3", alpha=0.2)
+    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
+    ax.set_title("light curve from B", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig

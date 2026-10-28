@@ -63,6 +63,7 @@ for regime, sweeps in (("short", ("up",)), ("long", ("up", "down"))):
     }
     for axes in ("linear", "loglog"):
         figs[f"a_vs_b_{axes}"] = sat_plots.plot_a_vs_b(pts, ls, ls["k"], regime, light_axes=axes)
+    figs["a_dy8_vs_b"] = sat_plots.plot_a_dy8_vs_b(pts, ls, ls["k"], regime)
     figs["waveforms"] = sat_plots.plot_waveforms(pts, f"{cfg['width_s'] * 1e9:g} ns" if regime == "short" else "10 µs",
                                                  xlim_us=(0.0, 0.6) if regime == "short" else (-1.0, 15.0))
     for name, fig in figs.items():

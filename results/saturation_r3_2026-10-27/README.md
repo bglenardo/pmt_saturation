@@ -98,6 +98,10 @@ The matched light scale uses the up-sweep only (before the shift): **k_match = 2
 
 ![Short linearity](short_linearity.png)
 
+![Short anode and dynode 8 against B](short_a_dy8_vs_b.png)
+
+A's anode charge and its dynode-8 (50 Ω) charge against B, up-sweep. The dynode charge is scaled to anode PE on the k_match window (×1.51 PE/pC). The two stay within 1 % up to ~4000 PE; above that the anode falls slowly behind (dynode 8 / anode = 1.03 at 6300 PE, 1.05 at 7800 PE, 1.08 at 9600 PE, LED 3.0 V). So dynode 8 saturates against the light almost as early as the anode.
+
 | Metric (250 ns) | 5 % low at (true light, A PE) | 10 % low at |
 |---|---|---|
 | A anode charge | **≈ 2960** | ≈ 4480 |
@@ -131,6 +135,10 @@ All long data were taken after the shift, and the two sweeps agree, so both are 
 **k_match = 10.2 ± 0.4** from A in 5000–30 000 PE (dim-end cross-check 9.8 ± 0.2).
 
 ![Long linearity](long_linearity.png)
+
+![Long anode and dynode 8 against B](long_a_dy8_vs_b.png)
+
+As above for 10 µs, up-sweep (×1.6 PE/pC). Dynode 8 bends and collapses with the anode (dynode 8 / anode = 1.00–1.01 from 14 000 PE through the collapse). Its low points at small light are the 235 ns high-pass of the 50 Ω pickoff, not a PMT effect.
 
 | Metric (10 µs) | 5 % low at (true light, A PE) | 10 % low at |
 |---|---|---|
