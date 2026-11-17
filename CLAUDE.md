@@ -61,7 +61,7 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
   coarse range and buried small signals in quantization noise.
 - **When asked to finish unattended, switch the HV off at the end** (see Runbooks), and make the off step
   run even on failure.
-- **Commits** go on `main`. The GitHub remote is `origin` = `bglenardo/ad3-pulse-lab`; the user pushes.
+- **Commits** go on `main`. The GitHub remote is `origin` = `bglenardo/pmt_saturation` (renamed from `ad3-pulse-lab` on 2026-11-16; the Python package is still `ad3pulse`); the user pushes.
 
 ## Setting up on a new PC
 1. **Python 3.10+.** The current PC runs 3.14.7. From the repo root:

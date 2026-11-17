@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-16: GitHub repo renamed
+
+- The GitHub repo `bglenardo/ad3-pulse-lab` is now **`bglenardo/pmt_saturation`** (GitHub redirects the old URL);
+  `origin` points at the new URL. The Python package keeps the name `ad3pulse`.
+
 ## 2026-11-16: round-4 write-up
 
 **Added**
