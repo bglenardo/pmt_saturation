@@ -137,7 +137,7 @@ class ScopeSession:
 
     resource: str
     settings: ScopeSettings
-    ad3: object  # AnalogDiscovery with a running pulse train (or a fake)
+    pulser: object  # SiglentSDG with a running pulse train (or a fake)
     rate_hz: float
     out_dir: Path
     stamp: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -231,10 +231,12 @@ class ScopeSession:
 
     # -- LED ---------------------------------------------------------------
     def set_amplitude(self, volts: float) -> None:
-        if volts != self.amplitude:
-            self.ad3.set_pulse_amplitude(volts, max_v=self.max_led_v)
-            self.amplitude = volts
-            time.sleep(0.2)
+        # Always sent, never skipped as unchanged: start_pulse_train() resets the level behind the
+        # session's back. On 2026-11-14 the first point of both round-4 scans had the timing cell's
+        # amplitude, was skipped and was recorded at the 0.5 V start level.
+        self.pulser.set_pulse_amplitude(volts, max_v=self.max_led_v)
+        self.amplitude = volts
+        time.sleep(0.2)
 
     # -- recording ---------------------------------------------------------
     def record(self, n_frames: int, channels: tuple[int, ...] | None = None) -> FrameSet:

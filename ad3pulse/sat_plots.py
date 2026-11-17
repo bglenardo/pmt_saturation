@@ -36,7 +36,7 @@ def plot_ratio_scan(rows: list[dict], kres: dict, title: str = ""):
         okp = pe > 2 * pee
         ax.errorbar(amp[okp], pe[okp], yerr=pee[okp], fmt="s", ms=4, mfc="none", capsize=2, color=col,
                     label=f"{name}: mean charge / Q1")
-    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("photoelectrons per pulse")
+    ax.set_yscale("log"); ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel("photoelectrons per pulse")
     ax.set_title(title or "joint occupancy scan", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     ax = axes[1]
     k_err = np.abs(kres["k_err"])  # a negative k (B below zero) gives a negative propagated error
@@ -48,7 +48,7 @@ def plot_ratio_scan(rows: list[dict], kres: dict, title: str = ""):
     ax.errorbar(amp[use], kres["k"][use], yerr=kres["k_err"][use], fmt="o", ms=4, color="C3", capsize=2, label="used")
     ax.axhline(kres["k_mean"], color="k", ls="--", lw=0.8,
                label=f"k = {kres['k_mean']:.0f} ± {kres['k_mean_err']:.0f} (χ²/dof {kres['chi2_dof']:.2f})")
-    ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("A PE (charge) / B zero-PE μ")
+    ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel("A PE (charge) / B zero-PE μ")
     ax.set_title("light ratio k", fontsize=9); ax.grid(alpha=.3); ax.legend(fontsize=7)
     fig.tight_layout()
     return fig
@@ -73,7 +73,7 @@ def plot_vs_led(points, metrics: dict, regime: str):
                 ax.errorbar(amp[sel], val[sel], yerr=err[sel], fmt=MARKERS[sw], ms=4, capsize=2,
                             color=COLORS.get(name), mfc="none" if sw == "down" else None,
                             label=f"{name} ({sw})")
-        ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel(ylabel)
+        ax.set_yscale("log"); ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel(ylabel)
         ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.suptitle(f"{regime} pulses: response against LED voltage", fontsize=10)
     fig.tight_layout()
@@ -116,7 +116,7 @@ def plot_a_vs_b(points, ls: dict, k: float, regime: str, light_axes: str = "semi
         ax.set_xscale("log")
         ax.xaxis.set_major_locator(MultipleLocator(0.2)); ax.xaxis.set_minor_locator(MultipleLocator(0.05))
         ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f")); ax.xaxis.set_minor_formatter(FormatStrFormatter(""))
-    ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
+    ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel("B per pulse")
     ax.set_title(f"light curve from B ({'linear' if light_axes == 'linear' else light_axes.replace('semilogy', 'log y')} axes)",
                  fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.tight_layout()
@@ -265,7 +265,7 @@ def plot_ab_ratio(results: dict, title: str = ""):
         ax.axhline(r["mean"], color=col, ls="--", lw=0.8,
                    label=f"{name}: A/B = {r['mean']:.4g} ± {r['mean_err']:.2g}, "
                          f"slope {r['slope_per_V']:.3g} ± {r['slope_err']:.2g} /V")
-    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("A / B (PE / PE)")
+    ax.set_yscale("log"); ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel("A / B (PE / PE)")
     ax.set_title(title or "A/B light ratio (open: B insignificant, or A past its linear range)", fontsize=9)
     ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.tight_layout()
@@ -345,7 +345,7 @@ def plot_a_dy8_vs_b(points, ls: dict, k: float, regime: str, sweep: str = "up"):
     f = ls["fit"]
     ax.plot(vv, f.value(vv), "C3", lw=1, label="smooth fit (light curve / k)")
     ax.fill_between(vv, f.value(vv) - f.error(vv), f.value(vv) + f.error(vv), color="C3", alpha=0.2)
-    ax.set_yscale("log"); ax.set_xlabel("AD3 LED amplitude (V)"); ax.set_ylabel("B per pulse")
+    ax.set_yscale("log"); ax.set_xlabel("LED amplitude (V)"); ax.set_ylabel("B per pulse")
     ax.set_title("light curve from B", fontsize=9); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=7)
     fig.tight_layout()
     return fig

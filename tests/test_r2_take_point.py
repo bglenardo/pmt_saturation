@@ -9,7 +9,7 @@ import numpy as np
 from ad3pulse.acquire import PeakLimitExceeded, ScopeSession, ScopeSettings, autorange, check_peaks
 from ad3pulse.sat_analysis import summarize_frames
 
-from test_saturation import FakeAD3, FakeScope
+from test_saturation import FakePulser, FakeScope
 
 NB = Path(__file__).resolve().parents[1] / "saturation_r2.ipynb"
 
@@ -21,16 +21,16 @@ def _take_point_source() -> str:
 
 
 def test_take_point_stops_1mohm_and_skips_brighter(tmp_path) -> None:
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.05, 2: 0.01, 4: -0.8}, ad3)   # Ch4 positive: +0.8 V per LED volt at 50 Ohm
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.05, 2: 0.01, 4: -0.8}, pulser)   # Ch4 positive: +0.8 V per LED volt at 50 Ohm
     scope.omeg_gain = 2.0                                   # ... and 1.6 V per LED volt at 1 MOhm
     settings = ScopeSettings(pmt_scale_v_div={1: 0.01, 2: 0.01, 4: 0.01}, polarity={4: +1})
-    session = ScopeSession("fake", settings, ad3, rate_hz=4.0, out_dir=tmp_path, scope_factory=lambda r: scope).open()
+    session = ScopeSession("fake", settings, pulser, rate_hz=4.0, out_dir=tmp_path, scope_factory=lambda r: scope).open()
     cfg = dict(baseline=(-500e-9, -300e-9), signal=(40e-9, 440e-9), control=(-480e-9, -80e-9),
                pre=(-500e-9, 40e-9), pulser_window=(20e-9, 80e-9), plateau=(450e-9, 495e-9))
     ns = dict(session=session, cfg=cfg, autorange=autorange, check_peaks=check_peaks,
               PeakLimitExceeded=PeakLimitExceeded, summarize_frames=summarize_frames, np=np,
-              REGIME="short", A_CH=1, B_CH=2, DYN_CH=4, Q1_PC={1: 0.9, 2: 1.1},
+              REGIME="short", A_CH=1, B_CH=2, DYN_CH=4, USE_DYN=True, Q1_PC={1: 0.9, 2: 1.1},
               MAX_PEAK_V={1: 3.0, 2: 3.0, 4: 3.0}, CH4_1M_STOP_V=3.0, PROBE_FRAMES=3)
     exec(compile(_take_point_source(), "take_point", "exec"), ns)
     take_point = ns["take_point"]
@@ -43,3 +43,20 @@ def test_take_point_stops_1mohm_and_skips_brighter(tmp_path) -> None:
     names = sorted(p.name.split("_1M")[0] for p in tmp_path.glob("short_up1M_*.npz"))
     assert len(names) == 2                               # only the two allowed 1 MOhm recordings saved
     assert results[1.0][1]["ch"][4]["impedance"] == "OMEG"
+
+
+def test_take_point_without_dynode(tmp_path) -> None:
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.05, 2: 0.01}, pulser)
+    settings = ScopeSettings(pmt_scale_v_div={1: 0.01, 2: 0.01})
+    session = ScopeSession("fake", settings, pulser, rate_hz=4.0, out_dir=tmp_path, scope_factory=lambda r: scope).open()
+    cfg = dict(baseline=(-500e-9, -300e-9), signal=(40e-9, 440e-9), control=(-480e-9, -80e-9),
+               pre=(-500e-9, 40e-9), pulser_window=(20e-9, 80e-9), plateau=(450e-9, 495e-9))
+    ns = dict(session=session, cfg=cfg, autorange=autorange, check_peaks=check_peaks,
+              PeakLimitExceeded=PeakLimitExceeded, summarize_frames=summarize_frames, np=np,
+              REGIME="short", A_CH=1, B_CH=2, DYN_CH=4, USE_DYN=False, Q1_PC={1: 0.9, 2: 1.1},
+              MAX_PEAK_V={1: 3.0, 2: 3.0, 4: 3.0}, CH4_1M_STOP_V=3.0, PROBE_FRAMES=3)
+    exec(compile(_take_point_source(), "take_point", "exec"), ns)
+    r50, r1m = ns["take_point"](1.5, 4, "up")
+    assert r1m is None and 4 not in r50["ch"] and set(r50["ch"]) >= {1, 2}
+    assert not list(tmp_path.glob("short_up1M_*.npz"))

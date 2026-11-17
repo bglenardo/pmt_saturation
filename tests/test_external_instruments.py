@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ad3pulse.hardware import (FrameSet, InstrumentError, IsegHV, Preamble, RigolScope,
-                               parse_iseg_value)
+from ad3pulse.hardware import (FrameSet, InstrumentError, IsegHV, Preamble, RigolScope, SiglentSDG,
+                               parse_bswv, parse_iseg_value, parse_siglent_value)
 from ad3pulse.instrument import PulseSpec
 
 
@@ -282,3 +282,131 @@ def test_pulse_fit_to_awg_keeps_long_pulses() -> None:
     pulse = PulseSpec(amplitude=1.0, width=10e-6, pre_delay=5e-6, post_delay=25e-6)
     pulse.fit_to_awg(max_rate=125e6, max_samples=32768)
     assert pulse.samples == 4096
+
+
+class FakeSiglent:
+    """Mimics the SDG2082X socket: set commands change a stored state and get no answer."""
+
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+        self.wave = {"WVTP": "SQUARE", "FRQ": "1000HZ", "WIDTH": "1e-07", "RISE": "8.4e-09S",
+                     "FALL": "8.4e-09S", "HLEV": "1V", "LLEV": "-1V", "DLY": "0"}
+        self.out = {"STATE": "OFF", "LOAD": "50", "PLRT": "NOR"}
+        self.clamp: dict[str, str] = {}  # parameter -> value the device keeps instead
+        self.ignore_off = False
+        self.ignore_wvtp = 0  # number of WVTP changes to ignore (seen after a power cycle)
+
+    def write(self, cmd: str) -> None:
+        self.commands.append(cmd)
+        head, _, args = cmd.partition(" ")
+        items = args.split(",")
+        if head == "C1:BSWV":
+            for k, v in zip(items[0::2], items[1::2]):
+                if k == "WVTP" and self.ignore_wvtp > 0:
+                    self.ignore_wvtp -= 1
+                    continue
+                self.wave[k] = self.clamp.get(k, v)
+        elif head == "C1:OUTP":
+            if items[0] in ("ON", "OFF"):
+                if not (items[0] == "OFF" and self.ignore_off):
+                    self.out["STATE"] = items[0]
+                items = items[1:]
+            for k, v in zip(items[0::2], items[1::2]):
+                self.out[k] = v
+
+    def query(self, cmd: str) -> str:
+        self.commands.append(cmd)
+        if cmd == "*IDN?":
+            return "Siglent Technologies,SDG2082X,SDG2XFBX7R1421,2.01.01.37R6"
+        if cmd == "C1:BSWV?":
+            return "C1:BSWV " + ",".join(f"{k},{v}" for k, v in self.wave.items())
+        if cmd == "C1:OUTP?":
+            return (f"C1:OUTP {self.out['STATE']},LOAD,{self.out['LOAD']},POWERON_STATE,0,"
+                    f"PLRT,{self.out['PLRT']}")
+        raise TimeoutError("VI_ERROR_TMO")
+
+    def close(self) -> None:
+        self.commands.append("CLOSE")
+
+
+@pytest.mark.parametrize("text, value", [("10HZ", 10.0), ("8.4e-09S", 8.4e-9), ("1.7V", 1.7),
+                                         ("1e-07", 1e-7), ("-0.2V", -0.2), ("0", 0.0)])
+def test_parse_siglent_value(text: str, value: float) -> None:
+    assert parse_siglent_value(text) == pytest.approx(value)
+
+
+def test_parse_bswv() -> None:
+    wave = parse_bswv("C1:BSWV WVTP,PULSE,FRQ,10HZ,PERI,0.1S,HLEV,1.7V,LLEV,0V,WIDTH,1e-07")
+    assert wave["WVTP"] == "PULSE" and wave["FRQ"] == "10HZ" and wave["WIDTH"] == "1e-07"
+
+
+def test_siglent_pulse_train_sequence_and_readback() -> None:
+    fake = FakeSiglent()
+    sdg = SiglentSDG(instrument=fake).connect()
+    width = sdg.start_pulse_train(100e-9, 10.0, 0.5)
+    assert width == pytest.approx(100e-9)
+    sets = [c for c in fake.commands if not c.endswith("?")]
+    assert sets[0] == "C1:OUTP OFF" and sets[-1] == "C1:OUTP ON"
+    assert "C1:OUTP LOAD,HZ,PLRT,NOR" in sets and "C1:BSWV WVTP,PULSE" in sets
+    assert "C1:BSWV LLEV,0" in sets and "C1:BSWV RISE,8.4e-09" in sets
+    assert fake.out["STATE"] == "ON" and fake.wave["HLEV"] == "0.5"
+    sdg.set_pulse_amplitude(1.72, max_v=3.0)
+    assert fake.wave["HLEV"] == "1.72"
+    sdg.stop_output(0)
+    assert fake.out["STATE"] == "OFF"
+    assert sdg.describe()["wave"]["WVTP"] == "PULSE"
+
+
+def test_siglent_refuses_fast_rates_and_bad_levels() -> None:
+    sdg = SiglentSDG(instrument=FakeSiglent()).connect()
+    with pytest.raises(ValueError, match="10 Hz"):
+        sdg.start_pulse_train(100e-9, 1000.0, 0.5)
+    with pytest.raises(ValueError):
+        sdg.start_pulse_train(100e-9, 10.0, 0.0)
+    sdg.start_pulse_train(10e-6, 4.0, 0.5)
+    with pytest.raises(ValueError, match="limit"):
+        sdg.set_pulse_amplitude(3.5, max_v=3.0)
+    with pytest.raises(ValueError):
+        sdg.set_pulse_amplitude(-1.0)
+
+
+def test_siglent_clamped_value_raises_and_output_stays_off() -> None:
+    fake = FakeSiglent()
+    fake.clamp["LLEV"] = "-0.2V"   # what MAX_OUTPUT_AMP did on the real unit
+    sdg = SiglentSDG(instrument=fake).connect()
+    with pytest.raises(InstrumentError, match="LLEV"):
+        sdg.start_pulse_train(100e-9, 10.0, 1.0)
+    assert fake.out["STATE"] == "OFF"
+
+
+def test_siglent_retries_ignored_pulse_mode_change(monkeypatch) -> None:
+    monkeypatch.setattr("ad3pulse.hardware.time.sleep", lambda s: None)
+    fake = FakeSiglent()
+    fake.ignore_wvtp = 1
+    sdg = SiglentSDG(instrument=fake).connect()
+    sdg.start_pulse_train(100e-9, 10.0, 0.5)
+    assert fake.wave["WVTP"] == "PULSE" and fake.out["STATE"] == "ON"
+    assert fake.commands.count("C1:BSWV WVTP,PULSE") == 2
+
+    fake = FakeSiglent()
+    fake.ignore_wvtp = 99
+    with pytest.raises(InstrumentError, match="pulse mode"):
+        SiglentSDG(instrument=fake).connect().start_pulse_train(100e-9, 10.0, 0.5)
+    assert fake.out["STATE"] == "OFF"
+
+
+def test_siglent_stop_output_checks_state() -> None:
+    fake = FakeSiglent()
+    fake.out["STATE"] = "ON"
+    fake.ignore_off = True
+    with pytest.raises(InstrumentError, match="off"):
+        SiglentSDG(instrument=fake).connect().stop_output()
+
+
+def test_siglent_resource_and_identity() -> None:
+    assert SiglentSDG.visa_resource("192.168.0.75") == "TCPIP0::192.168.0.75::5025::SOCKET"
+    assert SiglentSDG.visa_resource("TCPIP0::1.2.3.4::INSTR") == "TCPIP0::1.2.3.4::INSTR"
+    fake = FakeSiglent()
+    fake.query = lambda cmd: "RIGOL TECHNOLOGIES,MHO954"
+    with pytest.raises(InstrumentError, match="not a Siglent"):
+        SiglentSDG(instrument=fake).connect()

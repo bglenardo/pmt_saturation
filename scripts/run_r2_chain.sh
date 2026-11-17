@@ -33,7 +33,7 @@ if [ -n "$Q1A_ARG" ] && [ -n "$Q1B_ARG" ]; then
     Q1B=$Q1B_ARG
 else
     echo "=== $(date) SPE calibration: A $A_AMP V, B $B_AMP V"
-    $RUN cal "{1: $A_AMP, 2: $B_AMP}" "CAL_FRAMES = 5000" > $LOG/cal_$STAMP.log 2>&1
+    $RUN cal "{1: $A_AMP, 2: $B_AMP}" "CAL_FRAMES = 5000; OUTPUT_DIR = '$LOG/spe'" > $LOG/cal_$STAMP.log 2>&1
     grep RESULT $LOG/cal_$STAMP.log
     Q1A=$(grep -oP 'RESULT ch1: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)
     Q1B=$(grep -oP 'RESULT ch2: Q1 = \K[0-9.]+' $LOG/cal_$STAMP.log)

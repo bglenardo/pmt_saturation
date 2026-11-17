@@ -18,13 +18,15 @@ The first milestone, **single-photoelectron (SPE) calibration of both PMTs, is d
 
 | Device | Role | Connection |
 |---|---|---|
-| Digilent Analog Discovery 3 | Pulse source only (AWG W1) | USB; needs the WaveForms runtime |
+| Siglent SDG2082X | LED pulse source (CH1), since 2026-11-14 | Ethernet **192.168.0.75**, raw SCPI socket port **5025** |
+| Digilent Analog Discovery 3 | Retired pulse source (AWG W1); legacy tools only | USB; needs the WaveForms runtime |
 | Rigol MHO954 scope | All waveform capture | Ethernet **192.168.0.101**, raw SCPI socket port **5555** |
 | ISEG SHR 40 60 HV (SR040060R4050000200) | PMT bias, 4 ch × 6 kV | Ethernet **192.168.0.100**, raw TCP port **10001** |
 | Lab PC | | Ethernet adapter 192.168.0.102 on the instrument LAN |
 
-- **LED drive:** AD3 W1 → tee:
-  - one side → 330 Ω in series with the LED (turn-on ~1.6 V);
+- **LED drive:** Siglent CH1 (AD3 W1 until 2026-11-13) → tee:
+  - one side → 330 Ω in series with the LED (turn-on ~1.6 V). **A Kim wipe over the LED diffuses the light
+    (2026-11-14),** and the mounting was made more rigid;
   - other side → **Rigol Ch3** (1 MΩ). This is the trigger.
 - **PMT A** (higher voltage): ISEG **ch0**, negative polarity → **Rigol Ch1**, scope 50 Ω input.
 - **Ch4 (added 2026-10-08):** PMT A's dynode-8 pickoff through 4.7 nF.
@@ -51,6 +53,8 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
 - **HV control is separate from data capture.** Ramps are slow: bias with `hv set`, leave it on across
   captures, and switch off explicitly. Never ramp HV inside a capture command.
 - **Before full voltage, confirm the PMTs are dark** (light-tight). Ask about the current limit too.
+- **LED pulse rate ≤ 10 Hz whenever data are taken** (user, 2026-11-14), so the bases recharge. This
+  includes SPE calibration, which ran at 1 kHz up to round 3. `SiglentSDG` refuses faster rates.
 - **Acquisition code saves raw data only.** Baseline, charge, gain and fits belong in the notebooks and
   `ad3pulse/spe.py`.
 - **Don't reintroduce AD3 capture** as the PMT measurement path. AD3 auto-ranging silently jumped to a
@@ -67,32 +71,35 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
    WaveForms GUI before running code**, or the device is locked ("Devices are busy").
 3. **VISA:** none needed. `pyvisa-py` (pure Python) talks to both instruments over TCP; NI-VISA isn't used.
 4. **Network:** give the PC's instrument-LAN adapter a 192.168.0.x address (not .100/.101). Check with
-   `python -m ad3pulse hv status` and with `RigolScope().connect()` (prints the IDN).
+   `python -m ad3pulse hv status`, `python -m ad3pulse sdg status` and `RigolScope().connect()` (prints the IDN).
 5. **Data and docs to copy by hand:**
    - `Documentation/*.pdf` (manuals, gitignored);
    - `runs/` (raw data, gitignored; ~92 MB for the SPE runs) if you need to re-fit old data.
-6. **Check:** `.venv\Scripts\python -m pytest -q`, which should pass 55 tests with no hardware needed.
+6. **Check:** `.venv\Scripts\python -m pytest -q`, which should pass 70 tests with no hardware needed.
 
 ## Repository layout
 - `ad3pulse/`:
-  - `instrument.py`: `PulseSpec` and `AnalogDiscovery`. Covers single pulses, the free-running
+  - `instrument.py` (legacy, AD3): `PulseSpec` and `AnalogDiscovery`. Covers single pulses, the free-running
     **`start_pulse_train()` / `set_pulse_amplitude()`**, and the legacy AD3 capture code.
   - `hardware.py`: **`RigolScope`** (configure, single-shot, frame recorder `record_frames()` → `FrameSet`)
-    and **`IsegHV`** (set/on/off, status bits, `wait_stable()`, `wait_off()`).
+    **`IsegHV`** (set/on/off, status bits, `wait_stable()`, `wait_off()`) and **`SiglentSDG`** (the LED pulser:
+    `start_pulse_train(width, rate, high_v)`, `set_pulse_amplitude()`, `stop_output()`, all checked by read-back).
   - `spe.py`: analysis. Charge integration, zero-PE occupancy, `pick_amplitude()`, and the SPE fit `fit_spe()`.
   - `acquire.py`: **`ScopeSession`** (scope settings, LED amplitude, retrying frame recording, raw saves),
     per-point vertical **`autorange()`** and the 50 Ω **peak guard** (`check_peaks()` → `PeakLimitExceeded`).
     Used by the saturation notebook; the SPE notebook still has its own `record()`.
   - `saturation.py`: saturation analysis. Peak current, binned charge, `linearity()` against the reference PMT,
     `crossing()`, `shape_ratio()`, `late_early()` with errors, and `flag_reference()`.
-  - `cli.py`: `python -m ad3pulse {list, single, sweep, repeat, gui, rigol-single, hv set|off|status}`.
+  - `cli.py`: `python -m ad3pulse {list, single, sweep, repeat, gui, rigol-single, hv set|off|status, sdg status|off}`.
   - `dwfapi.py`: ctypes wrapper for WaveForms (functions resolved by name).
   - `sweep.py`, `repeat.py`, `gui.py`: the legacy AD3-capture workflow.
 - `spe_calibration.ipynb`: **the SPE calibration**. Code cells are tagged: `parameters`, `connect`,
   `timing`, `scan`, `choose`, `calibrate`, `load_saved`, `fit`, `close`, `emergency`.
 - `pmt_bias_test.ipynb`: bias test. Ramp up, one Rigol acquisition, ramp down (`finally:`).
 - `overlay_waveforms.ipynb`: overlays from the legacy AD3 sweep.
-- `saturation_r2.ipynb`: **round 2** (k scan, dynode-8 Ch4 at 50 Ω and 1 MΩ, finer scans). Its analysis is in
+- `saturation_r4_writeup.ipynb`: **round-4 write-up** (saved data only; run from the repo root). Headless:
+  `pip install nbclient` and execute with `nbclient.NotebookClient(nb, kernel_name="python3")`.
+- `saturation_r2.ipynb`: **rounds 2–4** (round 4 = Siglent pulser, `OUTPUT_DIR = runs/saturation_r4`; k scan, dynode-8 Ch4 at 50 Ω and 1 MΩ, finer scans). Its analysis is in
   `ad3pulse/sat_analysis.py` and `ad3pulse/sat_plots.py`.
 - `saturation.ipynb`: **saturation studies, round 1** (`REGIME = "short"` or `"long"`). Tags: `parameters`, `helpers`,
   `connect`, `timing`, `reach`, `scan`, `load_saved`, `analyze`, `close`, `emergency`.
@@ -102,8 +109,9 @@ wrong. The supply ramps at 25 V/s, so −1550 V takes about a minute.
   `--notebook X.ipynb cells TAG,TAG [overrides] [--hv-off]` for any notebook).
 - `results/<name>/`: committed summaries and plots (`spe_2026-10-07/` has the first calibration;
   `saturation_short_2026-10-07/` has the first short-pulse saturation look).
-- `scripts/run_r2_chain.sh`: the round-2/3 chain (`OUT=<dir>` picks the output directory).
+- `scripts/run_r2_chain.sh`: the round-2/3/4 chain (`OUT=<dir>` picks the output directory).
   `scripts/ab_ratio_check.py`, `r3_short_by_sweep.py` and `r3_writeup.py` re-analyse saved scans.
+- `scripts/sdg_check.py`: bench check of the Siglent pulses on Ch3 (HV off; width, edges, height against setting).
 - `runs/`: raw data (gitignored). `runs/spe/` and `runs/saturation/` hold `FrameSet` `.npz` files and
   `*.log` run logs.
 - `tests/`: pytest with fake instruments, plus synthetic-data tests for `spe.py` and `saturation.py`.
@@ -119,7 +127,8 @@ python -m ad3pulse hv status --channel 0
 `hv set` takes a **magnitude**; the sign comes from the channel's polarity. It leaves the HV on when it exits.
 
 **Switch HV off:** `python -m ad3pulse hv off --channel 0` (and `--channel 1`), or
-`python scripts/run_spe_notebook.py off`, which also stops the AD3 and waits until both channels are below 5 V.
+`python scripts/run_spe_notebook.py off`, which also switches the Siglent output off and waits until both
+channels are below 5 V. **LED off:** `python -m ad3pulse sdg off`.
 
 **SPE calibration:** in Jupyter, run `spe_calibration.ipynb` top to bottom. Or headless, with each stage
 logged to `runs/spe/`:
@@ -146,7 +155,8 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
 (fires one AD3 pulse and saves Rigol Ch1/Ch2 to CSV).
 
 ## SPE method (`ad3pulse/spe.py`, `spe_calibration.ipynb`)
-- **Light:** the AD3 free-runs 100 ns pulses (104 ns realised, 8 ns AWG steps) at 1 kHz. The Rigol triggers on
+- **Light:** the Siglent free-runs 100 ns pulses at **10 Hz** (round 4 on; until round 3 the AD3 ran 104 ns
+  pulses at 1 kHz). The Rigol triggers on
   Ch3 (rising edge, 0.5 V).
 - **Record:** 1k points at 1 GS/s, −500…+500 ns. Windows:
   - baseline −500…−300 ns, one median per run (adds no noise);
@@ -235,7 +245,34 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
 - The current limit can be changed while the channel is on (Kill Enable is off).
 - Closing the TCP connection leaves the HV as it is (`IsegHV.__exit__` only closes the connection).
 
-### Analog Discovery 3 (WaveForms SDK)
+### Siglent SDG2082X (`Documentation/SDG_Programming-Guide_PG02-E05C.pdf`, `SDG2000X_UserManual_EN.pdf`)
+- **Raw socket `TCPIP0::192.168.0.75::5025::SOCKET`, `
+` terminators.** IDN
+  `Siglent Technologies,SDG2082X,SDG2XFBX7R1421,2.01.01.37R6`.
+- **Set commands get no answer, and out-of-range values are clamped silently** (`FRQ,0` became 1 µHz). Every
+  setting is read back with `C1:BSWV?` (`WVTP,PULSE,FRQ,10HZ,...,HLEV,1V,LLEV,0V,...,WIDTH,1e-07,RISE,8.4e-09S,...`;
+  `parse_bswv()`), and `SiglentSDG` raises on a mismatch. A read-back takes ~8 ms.
+- **Pulse mode:** `C1:BSWV WVTP,PULSE`, `FRQ`, `WIDTH`, `RISE`/`FALL` (minimum **8.4 ns**), `HLEV`, `LLEV,0`.
+  The pulse starts at the period start; the scope triggers on its rising edge on Ch3 as before.
+- **Output impedance is always 50 Ω.** `OUTP LOAD,HZ` only rescales the displayed values, so HLEV is the
+  open-circuit voltage. On Ch3 (2026-11-14, HV off): 10 µs pulses reach 1.00–1.01 × HLEV; 100 ns pulses show a
+  fast (~5 ns) step to about half height and a cable echo ~30 ns later, ringing on the top (median over the
+  pulse ≈ 0.91 × HLEV), width 102.6 ns at 50 %, edge jitter 0.2 ns.
+- **After a power cycle it comes up in SINE, and the first `WVTP,PULSE` was ignored** while the following FRQ/level
+  commands were applied. `start_pulse_train()` now repeats WVTP until the read-back says PULSE.
+- **A 50 Ω terminator on the tee halves the drive** (50 Ω source): during one point (1.775 V, 2026-11-14) the user tried
+  one and Ch3 read 0.86 V instead of ~1.55 V, below LED turn-on. Without it Ch3 is ~0.87 × HLEV for 100 ns pulses.
+- **Don't use `MAX_OUTPUT_AMP`.** Setting it to 3 V moved the levels to HLEV 1.5 V / LLEV −0.2 V (reverse bias
+  on the LED). It is left at 20 V; the 3 V limit is in software (`max_v`).
+- Closing the socket leaves the output as it is. `stop_output()` sends `C1:OUTP OFF` and checks `C1:OUTP?`.
+- **One socket at a time, and the SCPI server can lock up (2026-11-14).** While a run held the SDG, a second
+  connection (`sdg status`) timed out. When the run closed its socket, a fresh connection was reset at once,
+  and from then on ports 5025/5024 and VXI-11 refused every connection (ping still answered) for 30+ min.
+  The output was already confirmed OFF. **Never open a second SDG connection during a run, and don't reconnect
+  straight after one closes.** `pulser_off()` now skips the reconnect when the run confirmed OFF, and
+  `connect()` retries with 3 s pauses. Recovery: power-cycle the SDG (or LAN reset on its front panel).
+
+### Analog Discovery 3 (WaveForms SDK, retired as the pulser on 2026-11-14)
 - **Pulse train:** a custom AWG buffer for one short period (pre + width + post), then
   `FDwfAnalogOutWaitSet(1/rate − period)` at an idle 0 V offset, with `RepeatSet(0)` to repeat until stopped.
 - **With AutoConfigure on, any `…Set` call while running stops the AWG** (status → READY), so
@@ -304,7 +341,35 @@ settings (`R`) are resolved in the `helpers` cell. Add `--hv-off` for unattended
   The reach scan (16 points × 30 pulses at 2 Hz) took ~10 min.
 
 ## Status and next steps
-**Where things stand (2026-10-28):** the HV is **off** on both channels. **Round 3 is done:**
+**Round 4 (2026-11-14, Siglent pulser, 100 ns + 10 µs):** chain 16:22–21:36, HV off at the end
+(`OUT=runs/saturation_r4 bash scripts/run_r2_chain.sh 1.81 2.055`, log `runs/saturation_r4/chain.log`).
+**Written up in `saturation_r4_writeup.ipynb`** (repo root, runs in ~20 s from saved data; figures and `summary.json`
+in `results/saturation_r4_2026-11-14/`).
+- **SPE:** A Q1 = 0.904 ± 0.013 pC, B Q1 = 1.080 ± 0.014 pC. **Ratio scan k = 137.5 ± 2.4** (B counted; 140.4 ± 2.1
+  against B's charge/Q1, which the scans use). Split run: 132 ± 6.
+- **First point of each scan was bad** (100 ns up 2.000 V, 10 µs up 1.700 V): the timing cell left
+  `ScopeSession.amplitude` at the same value, the scan restarted the SDG at 0.5 V, and `set_amplitude()` skipped
+  the "unchanged" value. Fixed (amplitude always sent; test). Both points are excluded.
+- **100 ns:** k_match 142.5 ± 0.8 (0.9σ from k_q). A linear to ~1 % up to ~1000 PE; charge 5 % low at ~1500–1730 PE,
+  10 % at ~2100–2250 PE (matched / direct scale), 41 % low at 6200 PE (5 V); peak flattens at ~34 mA.
+- **10 µs:** A(t)/B(t) through the pulse is flat at 1.88–1.98 V (A 2.8–11 k PE) and *rises during the pulse* from
+  ~2.0 V on: A's gain grows as charge leaves its base (supralinear), not a light-split change. Light scale fitted on
+  A = 2500–11 000 PE: **k = 57.4 ± 0.5** (default window 5–30 k gives 63.2, biased by the supralinearity).
+  A is 5 % high from ~12 000 PE, 10 % from ~21 000, +37 % at ~35 000; delivered charge tops out at 58 700 PE
+  (53 nC, 2.24 V), then falls (29 000 PE at 4 V, true light ~380 000). B's late/early drops ~10 % above ~1 nC, then
+  stays flat (probably LED shape; ≤ 5 % on the true light).
+- **Setup changes:** Kim wipe over the LED; the user dimmed B further (afternoon); **Ch4 (dynode 8) is unplugged**
+  (`USE_DYN = False` in `saturation_r2.ipynb`). **LED limit 5 V for 100 ns (user)**, 10 µs up to 4 V;
+  Ch3 at 1 V/div.
+- **Light split (100 ns), afternoon geometry:** A/B = 127 ± 6 from B counted (μ 0.1–0.5) against A's charge/Q1 at
+  2.0–2.2 V (`runs/spe_r4b/split`, `scripts/light_split.py`, A at 50 mV/div via `PMT_SCALE_BY_CH`). Zero-PE counting
+  at 50 mV/div loses 20–30 % of A's SPEs (higher threshold); at 10 mV/div charge/Q1 and counting agree.
+  The morning value (≈ 13) was poorly determined (11–35; B at μ ≈ 0.05).
+- **μ = 0.15:** A ~1.81 V, B ~2.055 V (`runs/spe_r4b/scan_coarse.log`).
+- **Reach (`runs/saturation_r4/reach`):** 100 ns: A 61 PE at 2.2 V, 340 at 2.6, 850 at 3.0 V (14.5 mA). 10 µs: A peaks
+  at ~55 900 PE (52 nC) at 2.3 V and falls to 42 100 at 3.0 V while B rises to ~3 040 PE; A/B ≈ 54–72 at 1.9–2.1 V.
+
+**Round 3 status (2026-10-28):** the HV is **off** on both channels. **Round 3 is done:**
 `results/saturation_r3_2026-10-27/README.md` (raw data `runs/saturation_r3/`). Round 2 is in
 `results/saturation_r2_2026-10-08/`, round 1 in `results/saturation_2026-10-07_newB/`.
 

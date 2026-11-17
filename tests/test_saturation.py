@@ -102,7 +102,7 @@ def test_screen_range_and_choose_scale() -> None:
     assert choose_scale(-9.0, False, 0.01, 3.0) == 1.0
 
 
-class FakeAD3:
+class FakePulser:
     def __init__(self) -> None:
         self.amplitudes: list[float] = []
 
@@ -115,9 +115,9 @@ class FakeAD3:
 class FakeScope:
     """Records frames of a negative pulse whose height depends on the LED amplitude."""
 
-    def __init__(self, peaks: dict[int, float], ad3: FakeAD3) -> None:
+    def __init__(self, peaks: dict[int, float], pulser: FakePulser) -> None:
         self.peaks = peaks  # channel -> volts per LED volt (negative pulse; a negative value = positive pulse)
-        self.ad3 = ad3
+        self.pulser = pulser
         self.scale: dict[int, float] = {}
         self.offset: dict[int, float] = {}
         self.recorded: list[int] = []
@@ -164,7 +164,7 @@ class FakeScope:
             v = np.zeros((n_frames, len(t)))
             if ch in self.peaks:
                 gain = self.omeg_gain if self.impedance.get(ch) == "OMEG" else 1.0
-                v[:, 600:620] = -self.peaks[ch] * self.ad3.amplitudes[-1] * gain
+                v[:, 600:620] = -self.peaks[ch] * self.pulser.amplitudes[-1] * gain
                 lo, hi = screen_range(self.scale[ch], self.offset[ch])
                 v = np.clip(v, lo, hi)
             codes[ch] = np.round(v / yinc + 30000).astype(np.uint16)
@@ -173,10 +173,10 @@ class FakeScope:
 
 
 def _session(tmp_path, peaks):
-    ad3 = FakeAD3()
-    scope = FakeScope(peaks, ad3)
+    pulser = FakePulser()
+    scope = FakeScope(peaks, pulser)
     settings = ScopeSettings(pmt_scale_v_div={1: 0.01, 2: 0.01})
-    s = ScopeSession("fake", settings, ad3, rate_hz=2.0, out_dir=tmp_path,
+    s = ScopeSession("fake", settings, pulser, rate_hz=2.0, out_dir=tmp_path,
                      scope_factory=lambda r: scope).open()
     return s, scope
 
@@ -229,10 +229,10 @@ def test_linearity_fit_mask_and_light_scale() -> None:
 
 def test_positive_pulse_channel_autorange_and_impedance_switch(tmp_path) -> None:
     from ad3pulse.acquire import ScopeSettings as SS
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.1, 4: -0.4}, ad3)          # Ch4: positive pulses (dynode pickoff)
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.1, 4: -0.4}, pulser)          # Ch4: positive pulses (dynode pickoff)
     settings = SS(pmt_scale_v_div={1: 0.01, 4: 0.01}, polarity={4: +1})
-    s = ScopeSession("fake", settings, ad3, rate_hz=2.0, out_dir=tmp_path,
+    s = ScopeSession("fake", settings, pulser, rate_hz=2.0, out_dir=tmp_path,
                      scope_factory=lambda r: scope).open()
     assert scope.offset[4] == pytest.approx(-0.03)      # positive pulses: trace shifted down
     assert screen_range(0.01, -0.03) == pytest.approx((-0.01, 0.07))
@@ -252,10 +252,10 @@ def test_positive_pulse_channel_autorange_and_impedance_switch(tmp_path) -> None
 
 def test_per_channel_peak_limit(tmp_path) -> None:
     from ad3pulse.acquire import ScopeSettings as SS
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.1, 4: -2.0}, ad3)           # Ch4 +4 V at 2 V LED
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.1, 4: -2.0}, pulser)           # Ch4 +4 V at 2 V LED
     settings = SS(pmt_scale_v_div={1: 0.05, 4: 1.0}, polarity={4: +1})
-    s = ScopeSession("fake", settings, ad3, rate_hz=2.0, out_dir=tmp_path,
+    s = ScopeSession("fake", settings, pulser, rate_hz=2.0, out_dir=tmp_path,
                      scope_factory=lambda r: scope).open()
     with pytest.raises(PeakLimitExceeded) as exc:
         autorange(s, 2.0, (-500e-9, -300e-9), max_peak_v={1: 2.0, 4: 3.0})
@@ -304,20 +304,20 @@ def test_align_shift_and_rise_time() -> None:
 def test_memory_depth_is_verified(tmp_path) -> None:
     from ad3pulse.acquire import ScopeSettings as SS, parse_depth
     assert parse_depth("10k") == 1e4 and parse_depth("1.0000E+04") == 1e4 and parse_depth(1000) == 1e3
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.1}, ad3)
-    ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="10k"), ad3, rate_hz=2.0,
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.1}, pulser)
+    ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="10k"), pulser, rate_hz=2.0,
                  out_dir=tmp_path, scope_factory=lambda r: scope).open()
     with pytest.raises(RuntimeError, match="not accepted"):
-        ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="20k"), ad3, rate_hz=2.0,
-                     out_dir=tmp_path, scope_factory=lambda r: FakeScope({1: 0.1}, ad3)).open()
+        ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}, memory_depth="20k"), pulser, rate_hz=2.0,
+                     out_dir=tmp_path, scope_factory=lambda r: FakeScope({1: 0.1}, pulser)).open()
 
 
 def test_apply_scale_reads_back_and_uses_actual_values(tmp_path) -> None:
     from ad3pulse.acquire import ScopeSettings as SS
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.1}, ad3)
-    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}), ad3, rate_hz=2.0, out_dir=tmp_path,
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.1}, pulser)
+    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.01}), pulser, rate_hz=2.0, out_dir=tmp_path,
                      scope_factory=lambda r: scope).open()
     assert s.settings.offset_actual == {}
     real_cfg = scope.configure_channel
@@ -343,17 +343,28 @@ def test_choose_scale_hysteresis() -> None:
 
 def test_autorange_never_raises_on_oscillation(tmp_path) -> None:
     from ad3pulse.acquire import ScopeSettings as SS
-    ad3 = FakeAD3()
-    scope = FakeScope({1: 0.1}, ad3)
-    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.05}), ad3, rate_hz=2.0, out_dir=tmp_path,
+    pulser = FakePulser()
+    scope = FakeScope({1: 0.1}, pulser)
+    s = ScopeSession("fake", SS(pmt_scale_v_div={1: 0.05}), pulser, rate_hz=2.0, out_dir=tmp_path,
                      scope_factory=lambda r: scope).open()
     peaks = iter([0.60, 0.50, 0.60, 0.50, 0.60, 0.50, 0.60, 0.50])   # scatter around the 0.1/0.2 boundary
     orig = scope.record_frames
 
     def noisy(n_frames, channels, timeout_s=60.0, mode="NORM"):
-        scope.peaks[1] = next(peaks) / ad3.amplitudes[-1]
+        scope.peaks[1] = next(peaks) / pulser.amplitudes[-1]
         return orig(n_frames, channels, timeout_s, mode)
 
     scope.record_frames = noisy
     scales = autorange(s, 1.0, (-500e-9, -300e-9), max_peak_v=2.0, max_steps=6)
     assert scales[1] in (0.1, 0.2)                               # settles, no RuntimeError
+
+
+def test_set_amplitude_is_resent_after_the_pulser_was_restarted(tmp_path, monkeypatch) -> None:
+    # 2026-11-14: start_pulse_train() reset the level to 0.5 V, and the first scan point (same amplitude
+    # as the timing check) was skipped as unchanged and recorded at 0.5 V.
+    monkeypatch.setattr("ad3pulse.acquire.time.sleep", lambda s: None)
+    s, _ = _session(tmp_path, {1: 0.01})
+    s.set_amplitude(2.0)
+    s.pulser.amplitudes.append(0.5)   # what a pulse-train restart does on the hardware
+    s.set_amplitude(2.0)
+    assert s.pulser.amplitudes[-1] == 2.0

@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-11-16: round-4 write-up
+
+**Added**
+- **`saturation_r4_writeup.ipynb`** (repo root): SPE calibration, light ratio (split run and ratio scan), A/B against
+  drive, 100 ns and 10 µs saturation with measured-vs-true light (true light from PMT B), raw and mean waveforms of
+  A with the linear expectation from B, and A(t)/B(t) through the 10 µs pulse. Figures and `summary.json` in
+  `results/saturation_r4_2026-11-14/`. Main findings: 100 ns charge 5 % low at ~1500–1730 PE, peak at ~34 mA;
+  10 µs: A supralinear (+37 %) before depletion, k = 57.4 from the A(t)/B(t)-flat region, max charge 53 nC.
+
+**Fixed**
+- `ScopeSession.set_amplitude()` always sends the amplitude. It skipped an "unchanged" value after the scan had
+  restarted the SDG at 0.5 V, so the first point of both round-4 scans was taken at 0.5 V (test added, 70 tests).
+
+**Changed**
+- `sat_plots`: LED axis labels no longer say "AD3".
+
+## 2026-11-14: Siglent SDG2082X replaces the AD3 as the LED pulser (round 4)
+
+**Added**
+- **`SiglentSDG`** in `ad3pulse/hardware.py` (raw socket 192.168.0.75:5025): pulse train with read-back
+  of every setting, `set_pulse_amplitude()`, `stop_output()`, `describe()`; `parse_bswv()`,
+  `parse_siglent_value()`. It refuses rates above 10 Hz (user's rule: LED pulses at <= 10 Hz whenever data
+  are taken). Offline tests with a fake SDG socket (67 tests).
+- `python -m ad3pulse sdg status|off`; `scripts/sdg_check.py` (Ch3 pulse shape bench check, HV off).
+
+**Changed**
+- `spe_calibration.ipynb` and `saturation_r2.ipynb` use the Siglent only (`PULSER_RESOURCE`); the pulse
+  width read back from the SDG goes into the saved metadata.
+- **SPE calibration at 10 Hz** (was 1 kHz). Short saturation pulses back at **100 ns** (`SHORT_WIDTH_S`).
+  Round-4 output in `runs/spe_r4/` and `runs/saturation_r4/`.
+- `ScopeSession.ad3` is now `ScopeSession.pulser`.
+- `run_spe_notebook.py`: `pulser_off()` (reuses the cells' SDG connection: the SDG serves one socket at a time)
+  replaces `ad3_off()`.
+- Hardware: Kim wipe over the LED as a diffuser; more rigid mounting (user).
+
 ## 2026-10-28: round-3 results (new light geometry, 250 ns short pulses)
 
 **Added**

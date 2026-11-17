@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .dwfapi import DwfError, dwf
-from .hardware import InstrumentError, IsegHV, RigolScope, RigolScopeCapture
+from .hardware import InstrumentError, IsegHV, RigolScope, RigolScopeCapture, SiglentSDG
 from .instrument import AnalogDiscovery, Capture, PulseSpec, ScopeSpec
 from .sweep import run_sweep, summarize
 from .repeat import capture_repeats
@@ -326,6 +326,18 @@ def cmd_hv(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sdg(a: argparse.Namespace) -> int:
+    with SiglentSDG(a.resource) as sdg:
+        print(f"Siglent: {sdg.idn} ({sdg.resource_name}), channel C{sdg.channel}")
+        if a.action == "off":
+            sdg.stop_output()
+            print("Output switched off.")
+        d = sdg.describe()
+        print("  output  " + ", ".join(f"{k} {v}" for k, v in d["output"].items()))
+        print("  wave    " + ", ".join(f"{k} {v}" for k, v in d["wave"].items()))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ad3pulse",
@@ -441,6 +453,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ISEG IP or VISA resource (default 192.168.0.100)")
         sp.add_argument("--channel", type=int, default=0, help="ISEG channel number")
     h.set_defaults(func=cmd_hv)
+
+    d = sub.add_parser("sdg", help="query or switch off the Siglent SDG2082X LED pulser")
+    d.add_argument("action", choices=("status", "off"))
+    d.add_argument("--resource", help="Siglent IP or VISA resource (default 192.168.0.75)")
+    d.set_defaults(func=cmd_sdg)
     return p
 
 

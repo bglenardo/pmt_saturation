@@ -13,13 +13,13 @@ stdout; redirect it to a log file in runs/spe/ for long runs.
     python scripts/run_spe_notebook.py refit [overrides]
         re-fit the newest saved calibration run (no hardware)
     python scripts/run_spe_notebook.py off
-        stop the AD3 output and switch HV ch0/ch1 off
+        stop the Siglent LED output and switch HV ch0/ch1 off
 
 Example: python scripts/run_spe_notebook.py cal "{1: 1.68}" "CAL_FRAMES = 5000" > runs/spe/cal.log 2>&1
 
 Any notebook, any tagged cells (--notebook defaults to spe_calibration.ipynb):
     python scripts/run_spe_notebook.py --notebook saturation.ipynb cells TAG,TAG,... [overrides] [--hv-off]
-        runs the cells in order. If they include connect, the AD3 is stopped at the end (also on
+        runs the cells in order. If they include connect, the Siglent output is stopped at the end (also on
         failure); with --hv-off, HV ch0/ch1 are switched off too.
     e.g. ... --notebook saturation.ipynb cells parameters,helpers,connect,reach,close "REGIME = 'long'"
 """
@@ -51,8 +51,12 @@ CELLS = {c["metadata"]["tags"][0]: "".join(c["source"])
          if c["cell_type"] == "code" and c["metadata"].get("tags")}
 
 
+LIVE = {}  # namespace of the running cells, so pulser_off() can reuse their Siglent connection
+
+
 def run(tags, overrides=""):
     ns = {"__name__": "__main__"}
+    LIVE["ns"] = ns
     for tag in tags:
         print(f"--- cell: {tag}", flush=True)
         exec(compile(CELLS[tag], f"<cell {tag}>", "exec"), ns)
@@ -61,14 +65,37 @@ def run(tags, overrides=""):
     return ns
 
 
-def ad3_off():
+def pulser_off():
+    """Switch the Siglent LED output off.
+
+    The SDG serves one socket at a time (a second connection timed out while a run held one,
+    2026-11-14), so the cells' own connection is used first, then closed, then a fresh one.
+    """
+    own = LIVE.get("ns", {}).get("pulser")
+    if own is not None and own.output_off_confirmed:
+        # The cells switched it off and read OUTP OFF back; a fresh connection right after theirs
+        # closed was reset, and the SDG then refused all connections (2026-11-14).
+        print("Siglent output off (confirmed by the run)", flush=True)
+        return
+    if own is not None and own._instrument is not None:
+        try:
+            own.stop_output()
+            print("Siglent output off", flush=True)
+            return
+        except Exception as exc:
+            print(f"Siglent stop on the run's connection: {exc!r}", flush=True)
+        finally:
+            try:
+                own.close()
+            except Exception:
+                pass
     try:
-        from ad3pulse.instrument import AnalogDiscovery
-        with AnalogDiscovery() as dev:
-            dev.stop_output(0)
-        print("AD3 output stopped", flush=True)
-    except Exception as exc:  # still held by this process: the notebook cells stop it themselves
-        print(f"AD3 stop: {exc!r}", flush=True)
+        from ad3pulse.hardware import SiglentSDG
+        with SiglentSDG() as sdg:
+            sdg.stop_output()
+        print("Siglent output off", flush=True)
+    except Exception as exc:
+        print(f"Siglent stop: {exc!r}", flush=True)
 
 
 def hv_off(channels=(0, 1)):
@@ -104,7 +131,7 @@ def main(argv):
                 pickle.dump(out, f)
             print("SCAN DONE", ns["CAL_AMPLITUDE_V"], flush=True)
         finally:
-            ad3_off()
+            pulser_off()
     elif mode in ("cal", "final"):
         overrides = f"CAL_AMPLITUDE_V = {eval(argv[2])!r}\n" + (argv[3] if len(argv) > 3 else "")
         try:
@@ -114,7 +141,7 @@ def main(argv):
                 raise
             traceback.print_exc()
         finally:
-            ad3_off()
+            pulser_off()
             if mode == "final":
                 hv_off()
             print("CAL DONE" + (" (HV off)" if mode == "final" else " (HV left on)"), flush=True)
@@ -132,12 +159,12 @@ def main(argv):
             traceback.print_exc()
         finally:
             if "connect" in tags:  # analysis-only runs never touch the hardware
-                ad3_off()
+                pulser_off()
             if hv_flag:
                 hv_off()
             print("CELLS DONE" + (" (HV off)" if hv_flag else " (HV left on)"), flush=True)
     elif mode == "off":
-        ad3_off()
+        pulser_off()
         hv_off()
     else:
         raise SystemExit(__doc__)

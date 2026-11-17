@@ -1,7 +1,7 @@
-"""Interfaces for the external capture chain: Rigol oscilloscope and ISEG HV supply.
+"""Interfaces for the LAN instruments: Rigol oscilloscope, ISEG HV supply and Siglent pulser.
 
-The AD3 remains the pulse generator only; the oscilloscope and HV source are the
-measurement/control devices used in the PMT experiment.
+The Siglent SDG2082X drives the LED (it replaced the AD3 on 2026-11-14); the
+oscilloscope and HV source are the measurement/control devices.
 """
 
 from __future__ import annotations
@@ -675,12 +675,226 @@ class RigolScope(_ResourceBase):
         self.close()
 
 
+_SIGLENT_NUMBER = re.compile(r"\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
+
+
+def parse_siglent_value(text: str) -> float:
+    """Parse a Siglent value such as ``10HZ``, ``8.4e-09S``, ``1.7V`` or ``1e-07`` (units dropped)."""
+    m = _SIGLENT_NUMBER.match(text)
+    if m is None:
+        raise InstrumentError(f"Cannot parse Siglent value {text!r}")
+    return float(m.group(1))
+
+
+def parse_bswv(reply: str) -> dict[str, str]:
+    """``C1:BSWV WVTP,PULSE,FRQ,10HZ,...`` -> ``{"WVTP": "PULSE", "FRQ": "10HZ", ...}``."""
+    body = reply.strip().split(" ", 1)[-1]
+    items = [x.strip() for x in body.split(",")]
+    return dict(zip(items[0::2], items[1::2]))
+
+
+class SiglentSDG(_ResourceBase):
+    """Siglent SDG2082X pulse generator over Ethernet (raw SCPI socket, port 5025).
+
+    Commands follow ``Documentation/SDG_Programming-Guide_PG02-E05C.pdf`` (sections
+    3.3 OUTP and 3.4 BSWV). The SDG answers nothing to a set command, and out-of-range
+    values are clamped silently (``FRQ,0`` became 1 uHz), so every setting is read
+    back with ``C1:BSWV?`` and compared.
+
+    The output impedance is 50 Ohm whatever ``LOAD`` says; with ``LOAD,HZ`` the
+    levels are open-circuit volts, and the LED tee sees less (Rigol Ch3 measures it).
+    ``MAX_OUTPUT_AMP`` is not used: setting it to 3 V moved the levels to
+    HLEV 1.5 V / LLEV -0.2 V (2026-11-14).
+    """
+
+    DEFAULT_HOST = "192.168.0.75"
+    PORT = 5025  # programming guide section 1.2.4
+    # User's rule (2026-11-14): LED pulses at <= 10 Hz whenever data are taken, so the bases
+    # recharge. Pulse mode itself goes down to 1 uHz.
+    MAX_RATE_HZ = 10.0
+    MIN_EDGE_S = 8.4e-9  # shortest rise/fall the SDG2082X accepts (read back 2026-11-14)
+    CONNECT_ATTEMPTS = 3
+    CONNECT_RETRY_S = 3.0
+
+    def __init__(self, resource_name: str | None = None, instrument: Any | None = None,
+                 channel: int = 1, timeout_ms: int = 5000, visa_backend: str = "@py") -> None:
+        super().__init__(instrument)
+        self.resource_name = resource_name
+        self.channel = channel
+        self.timeout_ms = timeout_ms
+        self.visa_backend = visa_backend
+        self.idn = ""
+        self.rate_hz: float | None = None
+        self.width_s: float | None = None
+        self.output_off_confirmed = False  # set by stop_output(), cleared when the output goes on
+
+    def connect(self, resource_name: str | None = None) -> "SiglentSDG":
+        if self._instrument is None:
+            try:
+                import pyvisa
+            except ImportError as exc:  # pragma: no cover - environment-specific
+                raise ImportError("pyvisa is required for live Siglent control") from exc
+            rm = pyvisa.ResourceManager(self.visa_backend)
+            name = self.visa_resource(resource_name or self.resource_name or self.DEFAULT_HOST)
+            self.resource_name = name
+            # A connection opened right after another one closed was reset (2026-11-14), so retry.
+            # pyvisa-py raises a bare Exception ("could not connect") when the port refuses.
+            for attempt in range(self.CONNECT_ATTEMPTS):
+                try:
+                    inst = rm.open_resource(name)
+                    break
+                except Exception:
+                    if attempt == self.CONNECT_ATTEMPTS - 1:
+                        raise
+                    time.sleep(self.CONNECT_RETRY_S)
+            inst.timeout = self.timeout_ms
+            inst.write_termination = "\n"
+            inst.read_termination = "\n"
+            self._instrument = inst
+        self.idn = self._query("*IDN?").strip()
+        if "SDG" not in self.idn.upper():
+            raise InstrumentError(f"not a Siglent SDG: {self.idn!r}")
+        return self
+
+    @classmethod
+    def visa_resource(cls, host_or_resource: str) -> str:
+        """``192.168.0.75`` -> ``TCPIP0::192.168.0.75::5025::SOCKET``; full VISA names pass through."""
+        if "::" in host_or_resource:
+            return host_or_resource
+        return f"TCPIP0::{host_or_resource}::{cls.PORT}::SOCKET"
+
+    @property
+    def _ch(self) -> str:
+        return f"C{self.channel}"
+
+    # -- state -------------------------------------------------------------
+    def read_wave(self) -> dict[str, str]:
+        return parse_bswv(self._query(f"{self._ch}:BSWV?"))
+
+    def read_output(self) -> dict[str, str]:
+        """``C1:OUTP OFF,LOAD,HZ,...`` -> ``{"STATE": "OFF", "LOAD": "HZ", ...}``."""
+        body = self._query(f"{self._ch}:OUTP?").strip().split(" ", 1)[-1]
+        items = [x.strip() for x in body.split(",")]
+        return {"STATE": items[0], **dict(zip(items[1::2], items[2::2]))}
+
+    def output_is_on(self) -> bool:
+        return self.read_output()["STATE"].upper() == "ON"
+
+    def describe(self) -> dict:
+        """Settings for run metadata: IDN, the basic-wave parameters and the output state."""
+        return {"idn": self.idn, "channel": self.channel, "wave": self.read_wave(),
+                "output": self.read_output()}
+
+    def _check(self, wave: dict[str, str], key: str, want: float, rel: float = 1e-3,
+               abs_tol: float = 0.0) -> float:
+        got = parse_siglent_value(wave.get(key, "nan"))
+        if not abs(got - want) <= max(rel * abs(want), abs_tol):
+            raise InstrumentError(f"Siglent {self._ch} {key}: asked {want:g}, reads {wave.get(key)!r}")
+        return got
+
+    @staticmethod
+    def _check_level(volts: float, max_v: float | None) -> None:
+        if volts <= 0:
+            raise ValueError("pulse amplitude must be > 0")
+        if max_v is not None and volts > max_v:
+            raise ValueError(f"amplitude {volts:g} V exceeds the {max_v:g} V limit")
+
+    # -- pulses ------------------------------------------------------------
+    def _enter_pulse_mode(self, attempts: int = 5, pause_s: float = 0.5) -> None:
+        """Switch to pulse mode and wait for the read-back to confirm it.
+
+        After a power cycle the first WVTP change was ignored (2026-11-14): the
+        SDG stayed in SINE while the following FRQ/level commands were applied.
+        """
+        for _ in range(attempts):
+            self._write(f"{self._ch}:BSWV WVTP,PULSE")
+            if self.read_wave().get("WVTP", "").upper() == "PULSE":
+                return
+            time.sleep(pause_s)
+        raise InstrumentError(f"Siglent {self._ch} did not switch to pulse mode: {self.read_wave()}")
+
+    def start_pulse_train(self, width_s: float, rate_hz: float, high_v: float,
+                          rise_s: float | None = None, fall_s: float | None = None,
+                          max_v: float | None = None) -> float:
+        """Free-run *width_s* pulses from 0 V to *high_v* at *rate_hz*; return the read-back width.
+
+        Edges default to the fastest the SDG allows. The output is switched off
+        while the shape is set, every value is checked by read-back, and the
+        output goes on last.
+        """
+        if not 0 < rate_hz <= self.MAX_RATE_HZ:
+            raise ValueError(f"pulse rate {rate_hz:g} Hz: data are taken at <= {self.MAX_RATE_HZ:g} Hz")
+        if width_s <= 0 or width_s * rate_hz >= 0.5:
+            raise ValueError(f"width {width_s:g} s does not fit a {rate_hz:g} Hz period")
+        self._check_level(high_v, max_v)
+        rise = rise_s if rise_s is not None else self.MIN_EDGE_S
+        fall = fall_s if fall_s is not None else self.MIN_EDGE_S
+        c = self._ch
+        self.stop_output()
+        self._write(f"{c}:OUTP LOAD,HZ,PLRT,NOR")
+        self._enter_pulse_mode()
+        self._write(f"{c}:BSWV FRQ,{rate_hz:.9g}")
+        self._write(f"{c}:BSWV WIDTH,{width_s:.9g}")
+        self._write(f"{c}:BSWV RISE,{rise:.9g}")
+        self._write(f"{c}:BSWV FALL,{fall:.9g}")
+        self._write(f"{c}:BSWV LLEV,0")
+        self._write(f"{c}:BSWV HLEV,{high_v:.6g}")
+        self._write(f"{c}:BSWV DLY,0")
+        wave = self.read_wave()
+        if wave.get("WVTP", "").upper() != "PULSE":
+            raise InstrumentError(f"Siglent {c} is not in pulse mode: {wave}")
+        self._check(wave, "FRQ", rate_hz)
+        width = self._check(wave, "WIDTH", width_s, rel=0.01)
+        self._check(wave, "RISE", rise, rel=0.01)
+        self._check(wave, "FALL", fall, rel=0.01)
+        self._check(wave, "HLEV", high_v, abs_tol=1e-3)
+        self._check(wave, "LLEV", 0.0, abs_tol=1e-3)
+        out = self.read_output()
+        if out.get("LOAD", "").upper() != "HZ" or out.get("PLRT", "").upper() != "NOR":
+            raise InstrumentError(f"Siglent {c} output is not HiZ/normal: {out}")
+        self.output_off_confirmed = False
+        self._write(f"{c}:OUTP ON")
+        if not self.output_is_on():
+            raise InstrumentError(f"Siglent {c} output did not switch on")
+        self.rate_hz, self.width_s = rate_hz, width
+        return width
+
+    def set_pulse_amplitude(self, volts: float, max_v: float | None = None) -> None:
+        """Change the pulse height (the 0 V low level is kept), checked by read-back."""
+        self._check_level(volts, max_v)
+        self._write(f"{self._ch}:BSWV HLEV,{volts:.6g}")
+        wave = self.read_wave()
+        self._check(wave, "HLEV", volts, abs_tol=1e-3)
+        self._check(wave, "LLEV", 0.0, abs_tol=1e-3)
+
+    def stop_output(self, channel: int | None = None) -> None:
+        """Switch the output off and confirm it (*channel* is accepted for AD3 compatibility, ignored)."""
+        self._write(f"{self._ch}:OUTP OFF")
+        if self.output_is_on():
+            raise InstrumentError(f"Siglent {self._ch} output did not switch off")
+        self.output_off_confirmed = True
+
+    def close(self) -> None:
+        super().close()
+        self._instrument = None
+
+    def __enter__(self) -> "SiglentSDG":
+        return self.connect(self.resource_name)
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        # Like IsegHV: closing the connection leaves the output as it is; stop it explicitly.
+        self.close()
+
+
 __all__ = [
     "IsegHV",
     "RigolScope",
     "RigolScopeCapture",
+    "SiglentSDG",
     "FrameSet",
     "Preamble",
     "InstrumentError",
     "parse_iseg_value",
+    "parse_siglent_value",
+    "parse_bswv",
 ]
